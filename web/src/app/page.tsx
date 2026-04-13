@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +53,9 @@ function isBriefPayload(data: unknown): data is Brief {
 }
 
 export default function Home() {
+  const { data: session, status } = useSession();
+  const signedIn = status === "authenticated";
+
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +93,10 @@ export default function Home() {
 
   function startAgentRun() {
     if (!brief) return;
+    if (!signedIn) {
+      setBuildError("개발을 시작하려면 GitHub 로그인이 필요합니다.");
+      return;
+    }
 
     const selected = brief.features.filter((_, i) => featureChecked[i]);
     if (selected.length === 0) return;
@@ -128,10 +136,10 @@ export default function Home() {
             );
           }
           let data: {
-            previewUrl?: string;
+            deploymentUrl?: string;
             error?: string;
             buildLog?: string[];
-            probe?: { lastStatus?: number; lastError?: string };
+            repo?: { owner: string; name: string };
           };
           try {
             data = JSON.parse(raw) as typeof data;
@@ -142,20 +150,15 @@ export default function Home() {
           const lines = Array.isArray(data.buildLog) ? data.buildLog : [];
           setBuildLogLines(lines);
           if (!res.ok) {
-            if (typeof data.previewUrl === "string" && data.previewUrl) {
-              setPreviewUrl(data.previewUrl);
+            if (typeof data.deploymentUrl === "string" && data.deploymentUrl) {
+              setPreviewUrl(data.deploymentUrl);
             }
-            const probe = data.probe;
-            const probeHint =
-              probe?.lastError != null
-                ? ` (헬스체크: ${probe.lastError})`
-                : "";
             throw new Error(
-              (data.error || `빌드 실패 (${res.status})`) + probeHint
+              data.error || `빌드 실패 (${res.status})`
             );
           }
-          if (typeof data.previewUrl === "string" && data.previewUrl) {
-            setPreviewUrl(data.previewUrl);
+          if (typeof data.deploymentUrl === "string" && data.deploymentUrl) {
+            setPreviewUrl(data.deploymentUrl);
           }
         } catch (e) {
           const msg =
@@ -245,9 +248,9 @@ export default function Home() {
           {previewUrl && (
             <Card className="w-full border-border text-left shadow-md">
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">샌드박스 미리보기</CardTitle>
+                <CardTitle className="text-base">배포된 앱</CardTitle>
                 <CardDescription>
-                  E2B에서 실행 중인 Next.js 앱입니다. 새 탭에서 열어 보세요.
+                  Vercel이 자동으로 배포한 앱입니다. 새 탭에서 열어 보세요.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -298,6 +301,8 @@ export default function Home() {
   const anyFeatureSelected = featureChecked.some(Boolean);
   const logsComplete =
     logMessages.length >= AGENT_LOG_MESSAGES.length;
+  const userLabel =
+    session?.user?.name || session?.user?.email || session?.githubLogin;
 
   return (
     <div className="min-h-full bg-background px-4 py-10 lg:py-12">
@@ -307,9 +312,30 @@ export default function Home() {
         <div
           className={`mx-auto w-full max-w-lg shrink-0 space-y-8 ${agentRunning ? "lg:mx-0" : ""}`}
         >
-          <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground lg:text-left">
-            딱코
-          </h1>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              딱코
+            </h1>
+            {signedIn ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => signOut()}
+              >
+                {userLabel ? `${userLabel} (로그아웃)` : "로그아웃"}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => signIn("github")}
+              >
+                GitHub 로그인
+              </Button>
+            )}
+          </div>
 
           <form onSubmit={onSubmit} className="flex flex-col gap-3">
             <input
@@ -411,8 +437,8 @@ export default function Home() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">에이전트 작업 로그</CardTitle>
                 <CardDescription>
-                  선택한 기능을 반영해 Claude가 코드를 만들고, E2B
-                  샌드박스에서 Next.js 앱을 실행합니다.
+                  선택한 기능을 반영해 Claude가 코드를 만들고, GitHub에 레포를
+                  생성한 뒤 Vercel로 자동 배포합니다.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -435,8 +461,8 @@ export default function Home() {
                 </ul>
                 {buildPending && logsComplete && (
                   <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-                    ☁️ E2B 샌드박스에서 의존성 설치 및 Next.js 개발 서버를
-                    띄우는 중입니다. 수 분 걸릴 수 있습니다…
+                    ☁️ GitHub 레포 생성/푸시 및 Vercel 배포를 진행 중입니다. 수 분
+                    걸릴 수 있습니다…
                   </p>
                 )}
               </CardContent>

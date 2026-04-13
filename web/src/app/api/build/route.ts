@@ -1,18 +1,17 @@
 import Anthropic, { APIError } from "@anthropic-ai/sdk";
-import { Sandbox } from "@e2b/code-interpreter";
-import { CommandExitError } from "e2b";
+import { Octokit } from "@octokit/rest";
+import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 
+import { authOptions } from "@/lib/auth";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-/**
- * E2B 공식: 공개 URL은 sandbox.getHost(포트)만 제공합니다. getHostname() API는 없습니다.
- * 브라우저/서버에서 접속: https://${sandbox.getHost(3000)}
- * network.allowPublicTraffic === false 이면 헤더 e2b-traffic-access-token 필수.
- */
-const TRAFFIC_TOKEN_HEADER = "e2b-traffic-access-token";
+type FeatureItem = { title: string; description: string };
 
-const CODEGEN_SYSTEM = `당신은 Next.js 14(App Router) 초소형 프로젝트만 생성합니다.
+const CODEGEN_SYSTEM = `당신은 Next.js(App Router) 초소형 프로젝트만 생성합니다.
 
 반드시 아래 형식의 JSON만 출력하세요. 마크다운·설명·코드펜스 금지.
 
@@ -20,13 +19,10 @@ const CODEGEN_SYSTEM = `당신은 Next.js 14(App Router) 초소형 프로젝트�
 
 규칙:
 - path는 프로젝트 루트 기준 상대 경로(슬래시 /). ".." 금지, 절대경로 금지.
-- 허용되는 path 접두사만 사용: package.json, tsconfig.json, next.config.mjs, app/
-- TypeScript + Next.js 14.2.x, React 18. next, react, react-dom, typescript, @types/node, @types/react, @types/react-dom 만 package.json dependencies에 포함.
-- next.config.mjs는 ESM 한 줄이라도 되는 유효한 설정 export.
-- tsconfig.json은 "jsx": "preserve", "moduleResolution": "bundler" 등 next 기본에 맞게.
-- app/layout.tsx 루트 레이아웃, app/page.tsx는 선택된 기능을 반영한 단일 페이지(한국어 UI). 필요 시 "use client".
-- app/globals.css는 Tailwind 없이 순수 CSS만.
-- package.json scripts에 "dev": "next dev -H 0.0.0.0 -p 3000", "build": "next build" 포함.
+- 허용되는 path 접두사만 사용: package.json, tsconfig.json, next.config.mjs, app/, public/
+- Next.js App Router를 사용하고, 최소한 app/layout.tsx, app/page.tsx를 포함.
+- app/page.tsx는 선택된 기능을 반영한 단일 페이지(한국어 UI).
+- package.json scripts에 "dev", "build", "start" 포함.
 - 모든 문자열은 JSON 이스케이프 규칙을 지켜 유효한 JSON이 되게 할 것.`;
 
 function stripJsonFence(text: string): string {
@@ -35,196 +31,107 @@ function stripJsonFence(text: string): string {
   return s.trim();
 }
 
-const ALLOWED_PREFIXES = [
-  "package.json",
-  "tsconfig.json",
-  "next.config.mjs",
-  "next.config.js",
-  "next.config.ts",
-  "app/",
-];
+const ALLOWED_PREFIXES = ["package.json", "tsconfig.json", "next.config.mjs", "app/", "public/"];
 
 function isAllowedPath(p: string): boolean {
   const n = p.replace(/\\/g, "/").replace(/^\/+/, "");
   if (!n || n.includes("..")) return false;
-  return ALLOWED_PREFIXES.some(
-    (pre) => n === pre || n.startsWith(pre.endsWith("/") ? pre : `${pre}/`)
-  );
+  return ALLOWED_PREFIXES.some((pre) => n === pre || n.startsWith(pre));
 }
 
 type BuildLog = string[];
-
 function logStep(log: BuildLog, message: string) {
   const line = `[${new Date().toISOString()}] ${message}`;
   log.push(line);
   console.log(`[api/build] ${message}`);
 }
 
-function formatFetchError(e: unknown): string {
-  if (e instanceof Error) {
-    const withCause = e as Error & { cause?: unknown };
-    const c = withCause.cause;
-    const causePart =
-      c instanceof Error
-        ? c.message
-        : c !== undefined && c !== null
-          ? String(c)
-          : "";
-    return [withCause.message, causePart].filter(Boolean).join(" | ");
-  }
-  return String(e);
+function slugifyRepoName(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "ddakco-app";
 }
 
-function buildPreviewUrl(host: string): string {
-  const h = host.trim();
-  if (h.startsWith("http://") || h.startsWith("https://")) return h;
-  return `https://${h}`;
+function randomSuffix(): string {
+  // URL-safe-ish short random
+  return Math.random().toString(36).slice(2, 8);
 }
 
-async function waitForPreviewUrl(
-  previewUrl: string,
-  trafficAccessToken: string | undefined,
-  log: BuildLog,
-  attempts = 45,
-  intervalMs = 2000
-): Promise<{ ok: boolean; lastStatus?: number; lastError?: string }> {
-  const headers: Record<string, string> = {
-    Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
-    "User-Agent": "Ddak-Co-BuildProbe/1.0",
-  };
-  if (trafficAccessToken) {
-    headers[TRAFFIC_TOKEN_HEADER] = trafficAccessToken;
-    logStep(
-      log,
-      `미리보기 요청에 ${TRAFFIC_TOKEN_HEADER} 헤더를 포함합니다(비공개 트래픽 샌드박스).`
-    );
-  } else {
-    logStep(
-      log,
-      "trafficAccessToken 없음 — 공개 트래픽 샌드박스로 가정하고 헤더 없이 요청합니다."
-    );
-  }
-
-  let lastError: string | undefined;
-  let lastStatus: number | undefined;
-
-  for (let i = 0; i < attempts; i++) {
-    try {
-      logStep(log, `헬스 체크 시도 ${i + 1}/${attempts}: GET ${previewUrl}`);
-      const res = await fetch(previewUrl, {
-        redirect: "follow",
-        signal: AbortSignal.timeout(12_000),
-        headers,
-      });
-      lastStatus = res.status;
-      if (res.ok || res.status === 304) {
-        logStep(
-          log,
-          `응답 성공 status=${res.status} (시도 ${i + 1}/${attempts})`
-        );
-        return { ok: true, lastStatus };
-      }
-      const snippet = (await res.text()).slice(0, 200).replace(/\s+/g, " ");
-      logStep(
-        log,
-        `비정상 HTTP status=${res.status}, 본문 앞부분: ${snippet || "(비어 있음)"}`
-      );
-      lastError = `HTTP ${res.status}`;
-    } catch (e) {
-      const msg = formatFetchError(e);
-      lastError = msg;
-      logStep(
-        log,
-        `fetch 실패 (시도 ${i + 1}/${attempts}): ${msg}`
-      );
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-
-  return { ok: false, lastStatus, lastError };
+async function vercelFetch<T>(
+  token: string,
+  path: string,
+  init: RequestInit
+): Promise<{ ok: true; data: T } | { ok: false; status: number; body: string }> {
+  const res = await fetch(`https://api.vercel.com${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+  const body = await res.text();
+  if (!res.ok) return { ok: false, status: res.status, body };
+  return { ok: true, data: JSON.parse(body) as T };
 }
 
 export async function POST(req: NextRequest) {
   const buildLog: BuildLog = [];
-  logStep(buildLog, "POST /api/build 처리 시작");
+  logStep(buildLog, "POST /api/build 시작");
+
+  const session = await getServerSession(authOptions);
+  const githubToken = session?.githubAccessToken;
+  const githubLogin = session?.githubLogin;
+
+  if (!githubToken) {
+    return NextResponse.json(
+      { error: "GitHub 로그인이 필요합니다.", buildLog },
+      { status: 401 }
+    );
+  }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const e2bKey = process.env.E2B_API_KEY;
+  const vercelToken = process.env.VERCEL_TOKEN;
   if (!anthropicKey) {
     return NextResponse.json(
       { error: "ANTHROPIC_API_KEY가 설정되지 않았습니다.", buildLog },
       { status: 500 }
     );
   }
-  if (!e2bKey) {
+  if (!vercelToken) {
     return NextResponse.json(
-      { error: "E2B_API_KEY가 설정되지 않았습니다.", buildLog },
+      { error: "VERCEL_TOKEN이 설정되지 않았습니다.", buildLog },
       { status: 500 }
     );
   }
 
-  let body: {
-    projectName?: string;
-    features?: { title: string; description: string }[];
-    originalIdea?: string;
-  };
+  let body: { projectName?: string; features?: FeatureItem[]; originalIdea?: string };
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { error: "잘못된 요청입니다.", buildLog },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "잘못된 요청입니다.", buildLog }, { status: 400 });
   }
 
-  const projectName =
-    typeof body.projectName === "string" ? body.projectName.trim() : "";
+  const projectName = typeof body.projectName === "string" ? body.projectName.trim() : "";
   const features = Array.isArray(body.features) ? body.features : [];
-  if (!projectName || features.length === 0) {
+  const selectedFeatures = features
+    .filter((f) => f && typeof f.title === "string" && typeof f.description === "string" && f.title.trim())
+    .map((f) => ({ title: f.title.trim(), description: f.description.trim() }));
+
+  if (!projectName || selectedFeatures.length === 0) {
     return NextResponse.json(
-      {
-        error: "projectName과 최소 1개의 기능(features)이 필요합니다.",
-        buildLog,
-      },
+      { error: "projectName과 선택된 기능(features)이 필요합니다.", buildLog },
       { status: 400 }
     );
   }
 
-  const sanitizedFeatures = features
-    .filter(
-      (f) =>
-        f &&
-        typeof f.title === "string" &&
-        typeof f.description === "string" &&
-        f.title.trim()
-    )
-    .map((f) => ({
-      title: f.title.trim(),
-      description: f.description.trim(),
-    }));
-
-  if (sanitizedFeatures.length === 0) {
-    return NextResponse.json(
-      { error: "유효한 기능 목록이 없습니다.", buildLog },
-      { status: 400 }
-    );
-  }
-
-  const model =
-    process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
-  const template =
-    process.env.E2B_SANDBOX_TEMPLATE?.trim() || "node";
-
-  const userPayload = {
-    projectName,
-    features: sanitizedFeatures,
-    originalIdea:
-      typeof body.originalIdea === "string" ? body.originalIdea.trim() : "",
-  };
-
+  // 1) Claude로 코드 생성
+  const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
   const anthropic = new Anthropic({ apiKey: anthropicKey });
+  let files: { path: string; content: string }[] = [];
 
-  let files: { path: string; content: string }[];
   try {
     logStep(buildLog, `Claude 코드 생성 시작 (model=${model})`);
     const msg = await anthropic.messages.create({
@@ -234,210 +141,196 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `다음 정보로 Next.js 앱 파일들의 JSON을 출력하세요.\n\n${JSON.stringify(userPayload, null, 2)}`,
+          content: `다음 정보를 바탕으로 Next.js 프로젝트 파일 JSON을 출력하세요.\n\n${JSON.stringify(
+            {
+              projectName,
+              features: selectedFeatures,
+              originalIdea: typeof body.originalIdea === "string" ? body.originalIdea.trim() : "",
+            },
+            null,
+            2
+          )}`,
         },
       ],
     });
 
     const block = msg.content.find((b) => b.type === "text");
     if (!block || block.type !== "text") {
-      return NextResponse.json(
-        {
-          error: "코드 생성 응답을 처리할 수 없습니다.",
-          buildLog,
-        },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "코드 생성 응답 처리 실패", buildLog }, { status: 502 });
     }
-
     const raw = stripJsonFence(block.text);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return NextResponse.json(
-        { error: "생성된 JSON 파싱에 실패했습니다.", buildLog },
-        { status: 502 }
-      );
-    }
-
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      !("files" in parsed) ||
-      !Array.isArray((parsed as { files: unknown }).files)
-    ) {
-      return NextResponse.json(
-        { error: "생성 형식이 올바르지 않습니다.", buildLog },
-        { status: 502 }
-      );
-    }
-
-    const rawFiles = (parsed as { files: unknown[] }).files;
-    files = [];
-    for (const item of rawFiles) {
-      if (!item || typeof item !== "object") continue;
-      const rec = item as Record<string, unknown>;
-      const path =
-        typeof rec.path === "string" ? rec.path.replace(/\\/g, "/") : "";
+    const parsed = JSON.parse(raw) as { files?: unknown[] };
+    const rawFiles = Array.isArray(parsed.files) ? parsed.files : [];
+    for (const it of rawFiles) {
+      if (!it || typeof it !== "object") continue;
+      const rec = it as Record<string, unknown>;
+      const path = typeof rec.path === "string" ? rec.path.replace(/\\/g, "/") : "";
       const content = typeof rec.content === "string" ? rec.content : "";
-      if (!path || !isAllowedPath(path)) continue;
+      if (!path || !content) continue;
+      if (!isAllowedPath(path)) continue;
       files.push({ path, content });
     }
-
     if (!files.some((f) => f.path === "package.json")) {
-      return NextResponse.json(
-        { error: "package.json이 생성되지 않았습니다.", buildLog },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "package.json이 생성되지 않았습니다.", buildLog }, { status: 502 });
     }
-    logStep(buildLog, `코드 생성 완료, 파일 ${files.length}개`);
+    logStep(buildLog, `코드 생성 완료: ${files.length}개 파일`);
   } catch (e) {
-    console.error(e);
-    logStep(
-      buildLog,
-      `Claude 단계 오류: ${e instanceof Error ? e.message : String(e)}`
-    );
+    const msg = e instanceof Error ? e.message : String(e);
+    logStep(buildLog, `Claude 오류: ${msg}`);
     if (e instanceof APIError) {
-      return NextResponse.json(
-        {
-          error: e.message || "Claude API 오류",
-          buildLog,
-        },
-        { status: e.status && e.status < 500 ? e.status : 502 }
-      );
+      return NextResponse.json({ error: e.message || "Claude API 오류", buildLog }, { status: 502 });
     }
-    return NextResponse.json(
-      { error: "코드 생성 중 오류가 발생했습니다.", buildLog },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: "코드 생성 중 오류가 발생했습니다.", buildLog }, { status: 502 });
   }
 
-  const workdir = "/home/user/ddak-preview";
-  let sandbox: InstanceType<typeof Sandbox> | null = null;
+  // 2) GitHub에 새 repo 생성 + 단일 커밋으로 파일 업로드
+  const octokit = new Octokit({ auth: githubToken });
+  let owner = githubLogin;
+  try {
+    if (!owner) {
+      const me = await octokit.users.getAuthenticated();
+      owner = me.data.login;
+    }
+  } catch {
+    // ignore
+  }
+  if (!owner) {
+    return NextResponse.json({ error: "GitHub 사용자 정보를 가져오지 못했습니다.", buildLog }, { status: 502 });
+  }
+
+  const repoName = `${slugifyRepoName(projectName)}-${randomSuffix()}`;
+
+  let defaultBranch = "main";
+  let repoId: number | undefined;
+  try {
+    logStep(buildLog, `GitHub repo 생성: ${owner}/${repoName}`);
+    const created = await octokit.repos.createForAuthenticatedUser({
+      name: repoName,
+      private: false,
+      auto_init: true,
+      description: `딱코가 생성한 프로젝트: ${projectName}`,
+    });
+    defaultBranch = created.data.default_branch || "main";
+    repoId = created.data.id;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    logStep(buildLog, `GitHub repo 생성 실패: ${msg}`);
+    return NextResponse.json({ error: `GitHub repo 생성 실패: ${msg}`, buildLog }, { status: 502 });
+  }
 
   try {
-    logStep(
-      buildLog,
-      `E2B Sandbox.create(template=${template}, allowPublicTraffic=true)`
-    );
-    sandbox = await Sandbox.create(template, {
-      apiKey: e2bKey,
-      timeoutMs: 300_000,
-      network: {
-        allowPublicTraffic: true,
-      },
+    logStep(buildLog, `GitHub 기본 브랜치: ${defaultBranch}`);
+    const ref = await octokit.git.getRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`,
+    });
+    const parentSha = ref.data.object.sha;
+    const parentCommit = await octokit.git.getCommit({
+      owner,
+      repo: repoName,
+      commit_sha: parentSha,
     });
 
-    logStep(
-      buildLog,
-      `샌드박스 준비됨 sandboxId=${sandbox.sandboxId} domain=${sandbox.sandboxDomain}`
-    );
-    if (sandbox.trafficAccessToken) {
-      logStep(
-        buildLog,
-        "sandbox.trafficAccessToken 존재 — 미리보기 fetch 시 헤더에 포함합니다."
-      );
-    }
+    const baseTreeSha = parentCommit.data.tree.sha;
+    const treeItems: { path: string; mode: "100644"; type: "blob"; sha: string }[] = [];
 
-    await sandbox.commands.run(`mkdir -p ${workdir}`, {
-      timeoutMs: 60_000,
-    });
-    logStep(buildLog, `작업 디렉터리 생성: ${workdir}`);
-
+    logStep(buildLog, "GitHub blobs 생성 중…");
     for (const f of files) {
-      const fullPath = `${workdir}/${f.path}`;
-      await sandbox.files.write(fullPath, f.content);
-    }
-    logStep(buildLog, `파일 쓰기 완료 (${files.length}개)`);
-
-    try {
-      logStep(buildLog, "npm install 실행 중…");
-      const installResult = await sandbox.commands.run(
-        `cd ${workdir} && npm install`,
-        { timeoutMs: 420_000 }
-      );
-      if (installResult.exitCode !== 0) {
-        const errOut =
-          installResult.stderr?.slice(-2000) ||
-          installResult.stdout?.slice(-2000) ||
-          "npm install 실패";
-        logStep(buildLog, `npm install 실패 exit=${installResult.exitCode}`);
-        return NextResponse.json(
-          { error: `의존성 설치 실패: ${errOut}`, buildLog },
-          { status: 502 }
-        );
-      }
-      logStep(buildLog, "npm install 성공");
-    } catch (e) {
-      if (e instanceof CommandExitError) {
-        const errOut =
-          e.stderr?.slice(-2000) || e.stdout?.slice(-2000) || e.message;
-        logStep(buildLog, `npm install CommandExitError: ${e.message}`);
-        return NextResponse.json(
-          { error: `의존성 설치 실패: ${errOut}`, buildLog },
-          { status: 502 }
-        );
-      }
-      throw e;
+      const blob = await octokit.git.createBlob({
+        owner,
+        repo: repoName,
+        content: f.content,
+        encoding: "utf-8",
+      });
+      treeItems.push({ path: f.path, mode: "100644", type: "blob", sha: blob.data.sha });
     }
 
-    logStep(buildLog, "next dev 백그라운드 시작 (0.0.0.0:3000)");
-    await sandbox.commands.run(
-      `cd ${workdir} && npx next dev -H 0.0.0.0 -p 3000`,
-      {
-        background: true,
-        timeoutMs: 15_000,
-      }
-    );
-
-    const hostOnly = sandbox.getHost(3000);
-    const previewUrl = buildPreviewUrl(hostOnly);
-    logStep(
-      buildLog,
-      `getHost(3000) → "${hostOnly}" (SDK에 getHostname은 없음) → 미리보기 URL: ${previewUrl}`
-    );
-
-    const probe = await waitForPreviewUrl(
-      previewUrl,
-      sandbox.trafficAccessToken,
-      buildLog
-    );
-
-    if (!probe.ok) {
-      logStep(
-        buildLog,
-        `헬스 체크 최종 실패 lastStatus=${probe.lastStatus ?? "n/a"} lastError=${probe.lastError ?? "n/a"}`
-      );
-      return NextResponse.json(
-        {
-          error:
-            "개발 서버가 제한 시간 내에 응답하지 않았습니다. buildLog의 fetch 오류(로컬 방화벽·DNS·프록시 또는 allowPublicTraffic 설정)를 확인하세요.",
-          previewUrl,
-          sandboxId: sandbox.sandboxId,
-          buildLog,
-          probe: {
-            lastStatus: probe.lastStatus,
-            lastError: probe.lastError,
-          },
-        },
-        { status: 504 }
-      );
-    }
-
-    logStep(buildLog, "미리보기 URL 검증 완료, 응답 반환");
-    return NextResponse.json({
-      previewUrl,
-      sandboxId: sandbox.sandboxId,
-      buildLog,
+    logStep(buildLog, "GitHub tree/commit 생성 중…");
+    const newTree = await octokit.git.createTree({
+      owner,
+      repo: repoName,
+      base_tree: baseTreeSha,
+      tree: treeItems,
     });
+
+    const newCommit = await octokit.git.createCommit({
+      owner,
+      repo: repoName,
+      message: `딱코: ${projectName} 초기 생성`,
+      tree: newTree.data.sha,
+      parents: [parentSha],
+    });
+
+    await octokit.git.updateRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${defaultBranch}`,
+      sha: newCommit.data.sha,
+      force: true,
+    });
+
+    logStep(buildLog, "GitHub push 완료");
   } catch (e) {
-    console.error(e);
-    const message = e instanceof Error ? e.message : "E2B 샌드박스 오류";
-    logStep(buildLog, `E2B 예외: ${message}`);
+    const msg = e instanceof Error ? e.message : String(e);
+    logStep(buildLog, `GitHub push 실패: ${msg}`);
+    return NextResponse.json({ error: `GitHub push 실패: ${msg}`, buildLog }, { status: 502 });
+  }
+
+  // 3) Vercel 프로젝트 생성 + 배포 생성
+  type VercelProjectRes = { id: string; name: string };
+  type VercelDeploymentRes = { url: string; id: string };
+
+  const createProject = await vercelFetch<VercelProjectRes>(vercelToken, "/v11/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: repoName,
+      framework: "nextjs",
+      gitRepository: { type: "github", repo: `${owner}/${repoName}` },
+    }),
+  });
+
+  if (!createProject.ok) {
+    logStep(buildLog, `Vercel 프로젝트 생성 실패 status=${createProject.status}`);
     return NextResponse.json(
-      { error: message, buildLog },
+      { error: `Vercel 프로젝트 생성 실패: ${createProject.body}`, buildLog },
       { status: 502 }
     );
   }
+  logStep(buildLog, `Vercel 프로젝트 생성 완료: ${createProject.data.id}`);
+
+  const createDeployment = await vercelFetch<VercelDeploymentRes>(vercelToken, "/v13/deployments", {
+    method: "POST",
+    body: JSON.stringify({
+      project: repoName,
+      name: repoName,
+      gitSource: {
+        type: "github",
+        org: owner,
+        repo: repoName,
+        ref: defaultBranch,
+      },
+      projectSettings: {
+        framework: "nextjs",
+      },
+    }),
+  });
+
+  if (!createDeployment.ok) {
+    logStep(buildLog, `Vercel 배포 생성 실패 status=${createDeployment.status}`);
+    return NextResponse.json(
+      { error: `Vercel 배포 생성 실패: ${createDeployment.body}`, buildLog },
+      { status: 502 }
+    );
+  }
+
+  const deploymentUrl = `https://${createDeployment.data.url}`;
+  logStep(buildLog, `배포 생성 완료: ${deploymentUrl}`);
+
+  return NextResponse.json({
+    deploymentUrl,
+    repo: { owner, name: repoName, id: repoId },
+    buildLog,
+  });
 }
+

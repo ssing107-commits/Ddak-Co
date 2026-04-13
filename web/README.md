@@ -8,7 +8,7 @@
 cd web
 npm install
 cp .env.example .env.local
-# .env.local에 ANTHROPIC_API_KEY, E2B_API_KEY 등을 채운 뒤
+# .env.local에 ANTHROPIC_API_KEY, GitHub/Vercel 키 등을 채운 뒤
 npm run dev
 ```
 
@@ -20,8 +20,11 @@ npm run dev
 |------|------|------|
 | `ANTHROPIC_API_KEY` | 예 | Anthropic API 키 |
 | `ANTHROPIC_MODEL` | 아니오 | 사용할 모델 ID (미설정 시 코드 기본값) |
-| `E2B_API_KEY` | 예 (`/api/build`) | E2B 샌드박스 API 키 |
-| `E2B_SANDBOX_TEMPLATE` | 아니오 | 샌드박스 템플릿(기본 `node`) |
+| `GITHUB_CLIENT_ID` | 예 | GitHub OAuth App Client ID |
+| `GITHUB_CLIENT_SECRET` | 예 | GitHub OAuth App Client Secret |
+| `NEXTAUTH_SECRET` | 예 | NextAuth 서명 키 |
+| `NEXTAUTH_URL` | 예 | 예: `https://your-domain.vercel.app` |
+| `VERCEL_TOKEN` | 예 (`/api/build`) | Vercel REST API 토큰 |
 
 `.env.local`은 Git에 올리지 마세요. 팀·배포 환경에는 Vercel 대시보드 등에서 동일한 키 이름으로 설정합니다.
 
@@ -30,8 +33,8 @@ npm run dev
 1. [Vercel](https://vercel.com)에 로그인하고 **Add New… → Project**로 Git 저장소를 연결합니다.
 2. 저장소 루트가 `web`이 아니라 상위 폴더(예: `Ddak-Co`)인 경우, 프로젝트 설정의 **Root Directory**를 `web`으로 지정합니다.
 3. **Environment Variables**에 `.env.example`에 적힌 이름 그대로 변수를 추가합니다.  
-   - `ANTHROPIC_API_KEY`, `E2B_API_KEY`는 **Production**(필요하면 Preview/Development도)에 넣습니다.  
-   - `ANTHROPIC_MODEL`, `E2B_SANDBOX_TEMPLATE`은 선택입니다.
+   - `ANTHROPIC_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `VERCEL_TOKEN`을 설정합니다.  
+   - `ANTHROPIC_MODEL`은 선택입니다.
 4. `/api/build`는 최대 약 5분까지 실행될 수 있습니다. Vercel **Pro** 등에서 `maxDuration`이 허용하는 한도를 확인하세요(Hobby는 제한이 더 짧을 수 있습니다).
 5. **Deploy**를 누르면 `npm install` → `npm run build`가 실행되고 배포가 완료됩니다.
 
@@ -39,4 +42,4 @@ npm run dev
 
 ## 스택
 
-Next.js(App Router), Anthropic Claude API, E2B(`@e2b/code-interpreter`), Tailwind CSS, shadcn/ui 스타일 컴포넌트
+Next.js(App Router), NextAuth(GitHub OAuth), Anthropic Claude API, GitHub API(Octokit), Vercel REST API, Tailwind CSS, shadcn/ui 스타일 컴포넌트
