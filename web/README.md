@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 딱코 (Ddak-Co)
 
-## Getting Started
+한 줄 아이디어로 Claude가 기획서를 만들어 주는 Next.js 앱입니다.
 
-First, run the development server:
+## 로컬에서 실행
 
 ```bash
+cd web
+npm install
+cp .env.example .env.local
+# .env.local에 ANTHROPIC_API_KEY 등을 채운 뒤
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+브라우저에서 [http://localhost:3000](http://localhost:3000) 을 엽니다.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 환경 변수
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 이름 | 필수 | 설명 |
+|------|------|------|
+| `ANTHROPIC_API_KEY` | 예 | Anthropic API 키 |
+| `ANTHROPIC_MODEL` | 아니오 | 사용할 모델 ID (미설정 시 코드 기본값) |
 
-## Learn More
+`.env.local`은 Git에 올리지 마세요. 팀·배포 환경에는 Vercel 대시보드 등에서 동일한 키 이름으로 설정합니다.
 
-To learn more about Next.js, take a look at the following resources:
+## Vercel에 배포
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. [Vercel](https://vercel.com)에 로그인하고 **Add New… → Project**로 Git 저장소를 연결합니다.
+2. 저장소 루트가 `web`이 아니라 상위 폴더(예: `Ddak-Co`)인 경우, 프로젝트 설정의 **Root Directory**를 `web`으로 지정합니다.
+3. **Environment Variables**에 `.env.example`에 적힌 이름 그대로 변수를 추가합니다.  
+   - `ANTHROPIC_API_KEY`는 **Production**(필요하면 Preview/Development도)에 반드시 넣습니다.  
+   - `ANTHROPIC_MODEL`은 선택입니다.
+4. **Deploy**를 누르면 `npm install` → `npm run build`가 실행되고 배포가 완료됩니다.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+이 저장소의 `vercel.json`은 Next.js 빌드 방식을 명시해 두었습니다. 루트 디렉터리만 `web`으로 맞추면 추가 설정 없이 동작하는 경우가 많습니다.
 
-## Deploy on Vercel
+## 스택
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js(App Router), Anthropic Claude API, Tailwind CSS, shadcn/ui 스타일 컴포넌트
