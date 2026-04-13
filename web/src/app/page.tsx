@@ -171,7 +171,21 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idea: idea.trim() }),
       });
-      const data = (await res.json()) as Brief & { error?: string };
+      const raw = await res.text();
+      const ct = res.headers.get("content-type") ?? "";
+      if (!ct.includes("application/json")) {
+        setError(
+          "서버가 JSON 대신 HTML 페이지를 돌려줬습니다. Vercel에서 함수 실행 시간이 초과(무료 플랜은 보통 10초 한도)됐거나 배포가 실패했을 수 있습니다. Pro 플랜·maxDuration 설정을 확인하거나 ANTHROPIC_MODEL을 더 빠른 모델로 바꿔 보세요."
+        );
+        return;
+      }
+      let data: Brief & { error?: string };
+      try {
+        data = JSON.parse(raw) as Brief & { error?: string };
+      } catch {
+        setError("응답이 올바른 JSON이 아닙니다.");
+        return;
+      }
       if (!res.ok) {
         setError(data.error ?? "요청에 실패했습니다.");
         return;

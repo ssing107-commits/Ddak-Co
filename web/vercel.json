@@ -4,6 +4,9 @@
   "installCommand": "npm install",
   "buildCommand": "npm run build",
   "functions": {
+    "src/app/api/brief/route.ts": {
+      "maxDuration": 60
+    },
     "src/app/api/build/route.ts": {
       "maxDuration": 300
     }

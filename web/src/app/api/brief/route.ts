@@ -1,6 +1,11 @@
 import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 
+/** Vercel Pro 등에서 Claude 응답 대기 시간 확보. Hobby는 플랜상 최대 10초라 초과 시 HTML 502가 날 수 있음. */
+export const maxDuration = 60;
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const SYSTEM = `당신은 제품 기획 어시스턴트입니다. 사용자가 한 줄로 적은 프로젝트 아이디어를 바탕으로 기획서 초안을 한국어로 작성합니다.
 
 반드시 아래 형식의 JSON 객체만 출력하세요. 마크다운 코드 블록(백틱)이나 설명 문장은 넣지 마세요.
@@ -19,41 +24,45 @@ function stripJsonFence(text: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." },
-      { status: 500 }
-    );
-  }
-
-  let body: { idea?: string };
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
-  }
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." },
+        { status: 500 }
+      );
+    }
 
-  const idea = typeof body.idea === "string" ? body.idea.trim() : "";
-  if (!idea) {
-    return NextResponse.json(
-      { error: "프로젝트 아이디어를 입력해 주세요." },
-      { status: 400 }
-    );
-  }
-  if (idea.length > 2000) {
-    return NextResponse.json(
-      { error: "아이디어는 2000자 이하로 입력해 주세요." },
-      { status: 400 }
-    );
-  }
+    let body: { idea?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: "잘못된 요청입니다." },
+        { status: 400 }
+      );
+    }
 
-  const model =
-    process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+    const idea = typeof body.idea === "string" ? body.idea.trim() : "";
+    if (!idea) {
+      return NextResponse.json(
+        { error: "프로젝트 아이디어를 입력해 주세요." },
+        { status: 400 }
+      );
+    }
+    if (idea.length > 2000) {
+      return NextResponse.json(
+        { error: "아이디어는 2000자 이하로 입력해 주세요." },
+        { status: 400 }
+      );
+    }
 
-  const anthropic = new Anthropic({ apiKey });
+    const model =
+      process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
 
-  try {
+    const anthropic = new Anthropic({ apiKey });
+
+    try {
     const msg = await anthropic.messages.create({
       model,
       max_tokens: 3072,
@@ -149,6 +158,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "알 수 없는 오류가 발생했습니다." },
       { status: 502 }
+    );
+    }
+  } catch (e) {
+    console.error("[api/brief] unhandled", e);
+    return NextResponse.json(
+      {
+        error:
+          "서버에서 처리 중 예외가 발생했습니다. Vercel 로그를 확인하거나 잠시 후 다시 시도해 주세요.",
+      },
+      { status: 500 }
     );
   }
 }
