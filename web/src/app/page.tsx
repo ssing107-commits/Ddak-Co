@@ -26,6 +26,14 @@ type Brief = {
 };
 
 type WorkflowPhase = "brief" | "agents" | "done";
+const ROLE_STORAGE_KEY = "ddakco:user-role";
+const ROLE_OPTIONS = [
+  { id: "solo-founder", label: "개인사업자 / 1인 창업자", emoji: "👤" },
+  { id: "hr", label: "인사팀", emoji: "🏢" },
+  { id: "ops-procurement", label: "총무팀 / 구매팀", emoji: "📦" },
+  { id: "finance", label: "재무팀 / 회계팀", emoji: "💰" },
+  { id: "marketing", label: "마케팅팀", emoji: "📣" },
+] as const;
 
 const AGENT_LOG_MESSAGES = [
   "📋 PM이 기획서를 검토하고 있습니다...",
@@ -69,6 +77,23 @@ export default function Home() {
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildPending, setBuildPending] = useState(false);
   const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [roleReady, setRoleReady] = useState(false);
+  const [customRoleInput, setCustomRoleInput] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(ROLE_STORAGE_KEY);
+    if (saved) setUserRole(saved);
+    setRoleReady(true);
+  }, []);
+
+  function saveRole(role: string) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ROLE_STORAGE_KEY, role);
+    }
+    setUserRole(role);
+  }
 
   useEffect(() => {
     if (runId === 0) return;
@@ -94,7 +119,12 @@ export default function Home() {
   function startAgentRun() {
     if (!brief) return;
     if (!signedIn) {
-      setBuildError("개발을 시작하려면 GitHub 로그인이 필요합니다.");
+      void signIn("github", {
+        callbackUrl:
+          typeof window !== "undefined"
+            ? window.location.href
+            : "/",
+      });
       return;
     }
 
@@ -201,7 +231,10 @@ export default function Home() {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea: idea.trim() }),
+        body: JSON.stringify({
+          idea: idea.trim(),
+          userRole: userRole ?? undefined,
+        }),
       });
       const raw = await res.text();
       const ct = res.headers.get("content-type") ?? "";
@@ -293,6 +326,69 @@ export default function Home() {
             기획서로 돌아가기
           </Button>
         </div>
+      </div>
+    );
+  }
+
+  if (roleReady && !userRole) {
+    const canSaveCustomRole = customRoleInput.trim().length > 0;
+    return (
+      <div className="min-h-full flex items-center justify-center bg-background px-4 py-10">
+        <Card className="w-full max-w-2xl border-border bg-card shadow-md">
+          <CardHeader className="space-y-2">
+            <CardTitle className="text-xl">어떤 팀/역할이신가요?</CardTitle>
+            <CardDescription>
+              선택한 유형은 기획서 기능 추천 우선순위에 반영됩니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {ROLE_OPTIONS.map((role) => (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => saveRole(role.label)}
+                  className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-3 text-left text-sm transition hover:border-primary/60 hover:bg-muted/40"
+                >
+                  <span aria-hidden>{role.emoji}</span>
+                  <span>{role.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="mb-2 text-sm font-medium">⚙️ 기타 (직접 입력)</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customRoleInput}
+                  onChange={(e) => setCustomRoleInput(e.target.value)}
+                  placeholder="예: CS팀, 운영기획, 연구소..."
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring"
+                />
+                <Button
+                  type="button"
+                  disabled={!canSaveCustomRole}
+                  onClick={() => saveRole(customRoleInput.trim())}
+                >
+                  저장
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter className="justify-between text-xs text-muted-foreground">
+            <span>나중에 localStorage에서 값을 지우면 다시 선택할 수 있습니다.</span>
+            {!signedIn && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => signIn("github")}
+              >
+                GitHub 로그인
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
       </div>
     );
   }
