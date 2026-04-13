@@ -213,7 +213,7 @@ export async function POST(req: NextRequest) {
   const model =
     process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
   const template =
-    process.env.E2B_SANDBOX_TEMPLATE?.trim() || "base";
+    process.env.E2B_SANDBOX_TEMPLATE?.trim() || "node";
 
   const userPayload = {
     projectName,
@@ -323,7 +323,7 @@ export async function POST(req: NextRequest) {
     );
     sandbox = await Sandbox.create(template, {
       apiKey: e2bKey,
-      timeoutMs: 900_000,
+      timeoutMs: 300_000,
       network: {
         allowPublicTraffic: true,
       },

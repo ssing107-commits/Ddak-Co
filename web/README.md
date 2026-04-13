@@ -21,7 +21,7 @@ npm run dev
 | `ANTHROPIC_API_KEY` | 예 | Anthropic API 키 |
 | `ANTHROPIC_MODEL` | 아니오 | 사용할 모델 ID (미설정 시 코드 기본값) |
 | `E2B_API_KEY` | 예 (`/api/build`) | E2B 샌드박스 API 키 |
-| `E2B_SANDBOX_TEMPLATE` | 아니오 | 샌드박스 템플릿(기본 `base`) |
+| `E2B_SANDBOX_TEMPLATE` | 아니오 | 샌드박스 템플릿(기본 `node`) |
 
 `.env.local`은 Git에 올리지 마세요. 팀·배포 환경에는 Vercel 대시보드 등에서 동일한 키 이름으로 설정합니다.
 
