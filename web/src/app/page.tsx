@@ -64,6 +64,7 @@ export default function Home() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildPending, setBuildPending] = useState(false);
+  const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
 
   useEffect(() => {
     if (runId === 0) return;
@@ -95,6 +96,7 @@ export default function Home() {
     setWorkflow("agents");
     setPreviewUrl(null);
     setBuildError(null);
+    setBuildLogLines([]);
     setBuildPending(true);
     setRunId((n) => n + 1);
 
@@ -117,15 +119,40 @@ export default function Home() {
             }),
             signal: AbortSignal.timeout(280_000),
           });
-          const data = (await res.json()) as {
+          const raw = await res.text();
+          const ct = res.headers.get("content-type") ?? "";
+          if (!ct.includes("application/json")) {
+            setBuildLogLines([]);
+            throw new Error(
+              `빌드 API가 JSON이 아닌 응답을 반환했습니다 (${res.status}).`
+            );
+          }
+          let data: {
             previewUrl?: string;
             error?: string;
+            buildLog?: string[];
+            probe?: { lastStatus?: number; lastError?: string };
           };
+          try {
+            data = JSON.parse(raw) as typeof data;
+          } catch {
+            setBuildLogLines([]);
+            throw new Error("빌드 응답 JSON 파싱에 실패했습니다.");
+          }
+          const lines = Array.isArray(data.buildLog) ? data.buildLog : [];
+          setBuildLogLines(lines);
           if (!res.ok) {
             if (typeof data.previewUrl === "string" && data.previewUrl) {
               setPreviewUrl(data.previewUrl);
             }
-            throw new Error(data.error || `빌드 실패 (${res.status})`);
+            const probe = data.probe;
+            const probeHint =
+              probe?.lastError != null
+                ? ` (헬스체크: ${probe.lastError})`
+                : "";
+            throw new Error(
+              (data.error || `빌드 실패 (${res.status})`) + probeHint
+            );
           }
           if (typeof data.previewUrl === "string" && data.previewUrl) {
             setPreviewUrl(data.previewUrl);
@@ -151,6 +178,7 @@ export default function Home() {
     setLogMessages([]);
     setPreviewUrl(null);
     setBuildError(null);
+    setBuildLogLines([]);
     setBuildPending(false);
   }
 
@@ -163,6 +191,7 @@ export default function Home() {
     setLogMessages([]);
     setPreviewUrl(null);
     setBuildError(null);
+    setBuildLogLines([]);
     setBuildPending(false);
     setLoading(true);
     try {
@@ -246,6 +275,16 @@ export default function Home() {
           )}
           {buildError && (
             <p className="text-sm text-destructive">{buildError}</p>
+          )}
+          {buildLogLines.length > 0 && (
+            <details className="w-full max-w-lg text-left">
+              <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+                서버 빌드 로그 ({buildLogLines.length}줄)
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                {buildLogLines.join("\n")}
+              </pre>
+            </details>
           )}
           <Button type="button" size="lg" variant="secondary" onClick={backToBrief}>
             기획서로 돌아가기
