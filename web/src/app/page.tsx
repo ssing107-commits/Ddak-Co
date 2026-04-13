@@ -2,22 +2,55 @@
 
 import { FormEvent, useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+
+type FeatureItem = {
+  title: string;
+  description: string;
+};
+
 type Brief = {
   projectName: string;
-  features: string[];
+  features: FeatureItem[];
   timeline: string;
 };
+
+function isBriefPayload(data: unknown): data is Brief {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const o = data as Record<string, unknown>;
+  if (typeof o.projectName !== "string" || typeof o.timeline !== "string")
+    return false;
+  if (!Array.isArray(o.features) || o.features.length !== 5) return false;
+  return o.features.every(
+    (f) =>
+      f &&
+      typeof f === "object" &&
+      typeof (f as FeatureItem).title === "string" &&
+      typeof (f as FeatureItem).description === "string"
+  );
+}
 
 export default function Home() {
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState<Brief | null>(null);
+  const [featureChecked, setFeatureChecked] = useState<boolean[]>([]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setBrief(null);
+    setFeatureChecked([]);
     setLoading(true);
     try {
       const res = await fetch("/api/brief", {
@@ -30,19 +63,12 @@ export default function Home() {
         setError(data.error ?? "요청에 실패했습니다.");
         return;
       }
-      if (
-        !data.projectName ||
-        !Array.isArray(data.features) ||
-        !data.timeline
-      ) {
+      if (!isBriefPayload(data)) {
         setError("응답 형식이 올바르지 않습니다.");
         return;
       }
-      setBrief({
-        projectName: data.projectName,
-        features: data.features,
-        timeline: data.timeline,
-      });
+      setBrief(data);
+      setFeatureChecked(data.features.map(() => true));
     } catch {
       setError("네트워크 오류가 발생했습니다.");
     } finally {
@@ -51,79 +77,93 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-full flex flex-col bg-gradient-to-b from-zinc-100 to-zinc-200 text-zinc-900 dark:from-zinc-950 dark:to-zinc-900 dark:text-zinc-100">
-      <header className="border-b border-zinc-200/80 bg-white/70 px-6 py-4 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/70">
-        <h1 className="text-lg font-semibold tracking-tight">
-          아이디어 → 기획서
+    <div className="min-h-full flex flex-col items-center bg-background px-4 py-16">
+      <div className="w-full max-w-lg space-y-8">
+        <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground">
+          딱코
         </h1>
-        <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
-          한 줄 아이디어를 넣으면 Claude가 프로젝트명·주요 기능 5가지·예상 일정을
-          한국어로 정리합니다.
-        </p>
-      </header>
 
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-10">
-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
-          <label htmlFor="idea" className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            프로젝트 아이디어 (한 줄)
-          </label>
-          <textarea
-            id="idea"
-            name="idea"
-            rows={3}
+        <form onSubmit={onSubmit} className="flex flex-col gap-3">
+          <input
+            type="text"
             value={idea}
-            onChange={(ev) => setIdea(ev.target.value)}
-            placeholder="예: 직장인 점심 메뉴를 팀원과 투표로 정하는 모바일 앱"
-            className="w-full resize-y rounded-xl border border-zinc-300 bg-white px-4 py-3 text-base shadow-sm outline-none ring-zinc-400/30 placeholder:text-zinc-400 focus:border-violet-500 focus:ring-4 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-violet-400"
-            disabled={loading}
+            onChange={(e) => setIdea(e.target.value)}
+            placeholder="프로젝트 아이디어를 한 줄로 입력"
             maxLength={2000}
+            disabled={loading}
+            aria-label="프로젝트 아이디어"
+            className="w-full rounded-lg border border-input bg-card px-3 py-2.5 text-base text-foreground shadow-sm outline-none ring-ring/0 transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           />
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-xs text-zinc-500">{idea.length} / 2000</span>
-            <button
-              type="submit"
-              disabled={loading || !idea.trim()}
-              className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-violet-500 dark:hover:bg-violet-400"
-            >
-              {loading ? "생성 중…" : "기획서 만들기"}
-            </button>
-          </div>
+          <Button type="submit" disabled={loading || !idea.trim()}>
+            {loading ? "생성 중…" : "기획서 만들기"}
+          </Button>
         </form>
 
         {error && (
-          <div
-            role="alert"
-            className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
-          >
-            {error}
-          </div>
+          <p className="text-center text-sm text-destructive">{error}</p>
         )}
 
         {brief && (
-          <article className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/80">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">
-              프로젝트명
-            </h2>
-            <p className="mt-1 text-xl font-semibold">{brief.projectName}</p>
-
-            <h2 className="mt-8 text-xs font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">
-              주요 기능 (5)
-            </h2>
-            <ol className="mt-3 list-decimal space-y-2 pl-5 text-zinc-700 dark:text-zinc-300">
-              {brief.features.map((f, i) => (
-                <li key={i}>{f}</li>
-              ))}
-            </ol>
-
-            <h2 className="mt-8 text-xs font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">
-              예상 일정
-            </h2>
-            <p className="mt-2 whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
-              {brief.timeline}
-            </p>
-          </article>
+          <Card className="border-border bg-card shadow-md">
+            <CardHeader className="pb-4">
+              <CardDescription>프로젝트명</CardDescription>
+              <CardTitle className="text-xl">{brief.projectName}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  예상 일정
+                </p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap text-card-foreground">
+                  {brief.timeline}
+                </p>
+              </div>
+              <div>
+                <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  주요 기능
+                </p>
+                <ul className="space-y-4">
+                  {brief.features.map((f, i) => {
+                    const id = `feature-${i}`;
+                    return (
+                      <li key={id} className="flex gap-3">
+                        <Checkbox
+                          id={id}
+                          checked={featureChecked[i]}
+                          onCheckedChange={(v) =>
+                            setFeatureChecked((prev) =>
+                              prev.map((c, j) =>
+                                j === i ? v === true : c
+                              )
+                            )
+                          }
+                          className="mt-0.5"
+                        />
+                        <label
+                          htmlFor={id}
+                          className="min-w-0 flex-1 cursor-pointer leading-snug"
+                        >
+                          <span className="block font-medium text-card-foreground">
+                            {f.title}
+                          </span>
+                          <span className="mt-1 block text-sm text-muted-foreground">
+                            {f.description}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </CardContent>
+            <CardFooter className="flex w-full flex-col pt-2">
+              <Button type="button" className="w-full" size="lg">
+                이 기능들로 개발 시작하기
+              </Button>
+            </CardFooter>
+          </Card>
         )}
-      </main>
+      </div>
     </div>
   );
 }
