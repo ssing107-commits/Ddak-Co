@@ -61,6 +61,9 @@ export default function Home() {
   const [logMessages, setLogMessages] = useState<string[]>([]);
   const [runId, setRunId] = useState(0);
   const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const [buildPending, setBuildPending] = useState(false);
 
   useEffect(() => {
     if (runId === 0) return;
@@ -77,12 +80,6 @@ export default function Home() {
       timeoutsRef.current.push(id);
     });
 
-    const doneId = setTimeout(() => {
-      setWorkflow("done");
-    }, AGENT_LOG_MESSAGES.length * 1000);
-
-    timeoutsRef.current.push(doneId);
-
     return () => {
       timeoutsRef.current.forEach(clearTimeout);
       timeoutsRef.current = [];
@@ -90,8 +87,61 @@ export default function Home() {
   }, [runId]);
 
   function startAgentRun() {
+    if (!brief) return;
+
+    const selected = brief.features.filter((_, i) => featureChecked[i]);
+    if (selected.length === 0) return;
+
     setWorkflow("agents");
+    setPreviewUrl(null);
+    setBuildError(null);
+    setBuildPending(true);
     setRunId((n) => n + 1);
+
+    const minMs = AGENT_LOG_MESSAGES.length * 1000;
+
+    void (async () => {
+      const animDone = new Promise<void>((resolve) => {
+        setTimeout(resolve, minMs);
+      });
+
+      const buildDone = (async () => {
+        try {
+          const res = await fetch("/api/build", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectName: brief.projectName,
+              features: selected,
+              originalIdea: idea.trim() || undefined,
+            }),
+            signal: AbortSignal.timeout(280_000),
+          });
+          const data = (await res.json()) as {
+            previewUrl?: string;
+            error?: string;
+          };
+          if (!res.ok) {
+            if (typeof data.previewUrl === "string" && data.previewUrl) {
+              setPreviewUrl(data.previewUrl);
+            }
+            throw new Error(data.error || `빌드 실패 (${res.status})`);
+          }
+          if (typeof data.previewUrl === "string" && data.previewUrl) {
+            setPreviewUrl(data.previewUrl);
+          }
+        } catch (e) {
+          const msg =
+            e instanceof Error ? e.message : "알 수 없는 오류가 발생했습니다.";
+          setBuildError(msg);
+        } finally {
+          setBuildPending(false);
+        }
+      })();
+
+      await Promise.all([animDone, buildDone]);
+      setWorkflow("done");
+    })();
   }
 
   function backToBrief() {
@@ -99,6 +149,9 @@ export default function Home() {
     timeoutsRef.current = [];
     setWorkflow("brief");
     setLogMessages([]);
+    setPreviewUrl(null);
+    setBuildError(null);
+    setBuildPending(false);
   }
 
   async function onSubmit(e: FormEvent) {
@@ -108,6 +161,9 @@ export default function Home() {
     setFeatureChecked([]);
     setWorkflow("brief");
     setLogMessages([]);
+    setPreviewUrl(null);
+    setBuildError(null);
+    setBuildPending(false);
     setLoading(true);
     try {
       const res = await fetch("/api/brief", {
@@ -136,14 +192,48 @@ export default function Home() {
   if (workflow === "done") {
     return (
       <div className="min-h-full flex flex-col items-center justify-center bg-background px-6 py-16">
-        <div className="flex max-w-md flex-col items-center gap-6 text-center">
+        <div className="flex max-w-lg flex-col items-center gap-6 text-center">
           <span className="text-5xl" aria-hidden>
             🎉
           </span>
           <p className="text-xl font-semibold leading-snug text-foreground">
             {COMPLETE_MESSAGE}
           </p>
-          <Button type="button" size="lg" onClick={backToBrief}>
+          {previewUrl && (
+            <Card className="w-full border-border text-left shadow-md">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">샌드박스 미리보기</CardTitle>
+                <CardDescription>
+                  E2B에서 실행 중인 Next.js 앱입니다. 새 탭에서 열어 보세요.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <a
+                  href={previewUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  {previewUrl}
+                </a>
+              </CardContent>
+              <CardFooter>
+                <Button asChild className="w-full" size="lg">
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    앱 열기
+                  </a>
+                </Button>
+              </CardFooter>
+            </Card>
+          )}
+          {buildError && (
+            <p className="text-sm text-destructive">{buildError}</p>
+          )}
+          <Button type="button" size="lg" variant="secondary" onClick={backToBrief}>
             기획서로 돌아가기
           </Button>
         </div>
@@ -153,6 +243,8 @@ export default function Home() {
 
   const agentRunning = workflow === "agents";
   const anyFeatureSelected = featureChecked.some(Boolean);
+  const logsComplete =
+    logMessages.length >= AGENT_LOG_MESSAGES.length;
 
   return (
     <div className="min-h-full bg-background px-4 py-10 lg:py-12">
@@ -266,7 +358,8 @@ export default function Home() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">에이전트 작업 로그</CardTitle>
                 <CardDescription>
-                  선택한 기능을 바탕으로 에이전트가 순차적으로 작업합니다.
+                  선택한 기능을 반영해 Claude가 코드를 만들고, E2B
+                  샌드박스에서 Next.js 앱을 실행합니다.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -287,6 +380,12 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
+                {buildPending && logsComplete && (
+                  <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+                    ☁️ E2B 샌드박스에서 의존성 설치 및 Next.js 개발 서버를
+                    띄우는 중입니다. 수 분 걸릴 수 있습니다…
+                  </p>
+                )}
               </CardContent>
             </Card>
           </aside>
