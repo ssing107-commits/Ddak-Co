@@ -234,53 +234,96 @@ export default function Home() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const input = idea.trim();
+    if (!input) return;
+
     setError(null);
     setBrief(null);
     setFeatureChecked([]);
-    setWorkflow("brief");
+    setWorkflow("agents");
     setLogMessages([]);
     setPreviewUrl(null);
     setBuildError(null);
     setBuildLogLines([]);
-    setBuildPending(false);
+    setBuildPending(true);
     setLoading(true);
+
+    const appendLog = (message: string) => {
+      setLogMessages((prev) => [...prev, message]);
+    };
+
     try {
-      const res = await fetch("/api/brief", {
+      const res = await fetch("/api/agent/orchestrate/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          idea: idea.trim(),
+          input,
           userRole: userRole ?? undefined,
         }),
       });
-      const raw = await res.text();
-      const ct = res.headers.get("content-type") ?? "";
-      if (!ct.includes("application/json")) {
-        setError(
-          "서버가 JSON 대신 HTML 페이지를 돌려줬습니다. Vercel에서 함수 실행 시간이 초과(무료 플랜은 보통 10초 한도)됐거나 배포가 실패했을 수 있습니다. Pro 플랜·maxDuration 설정을 확인하거나 ANTHROPIC_MODEL을 더 빠른 모델로 바꿔 보세요."
-        );
-        return;
-      }
-      let data: Brief & { error?: string };
-      try {
-        data = JSON.parse(raw) as Brief & { error?: string };
-      } catch {
-        setError("응답이 올바른 JSON이 아닙니다.");
-        return;
-      }
+
       if (!res.ok) {
-        setError(data.error ?? "요청에 실패했습니다.");
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text) as { error?: string };
+          setError(data.error ?? `요청 실패 (${res.status})`);
+        } catch {
+          setError(`요청 실패 (${res.status})`);
+        }
         return;
       }
-      if (!isBriefPayload(data)) {
-        setError("응답 형식이 올바르지 않습니다.");
+
+      if (!res.body) {
+        setError("스트림 응답을 받을 수 없습니다.");
         return;
       }
-      setBrief(data);
-      setFeatureChecked(data.features.map(() => true));
-    } catch {
-      setError("네트워크 오류가 발생했습니다.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const eventChunk of events) {
+          const line = eventChunk
+            .split("\n")
+            .find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          const jsonText = line.slice("data: ".length).trim();
+          if (!jsonText) continue;
+
+          let evt: { type?: string; message?: string; deployUrl?: string };
+          try {
+            evt = JSON.parse(jsonText) as typeof evt;
+          } catch {
+            continue;
+          }
+
+          if (typeof evt.message === "string" && evt.message) {
+            appendLog(evt.message);
+          }
+          if (evt.type === "done") {
+            if (typeof evt.deployUrl === "string" && evt.deployUrl) {
+              setPreviewUrl(evt.deployUrl);
+            }
+            setWorkflow("done");
+          }
+          if (evt.type === "error") {
+            throw new Error(evt.message || "오케스트레이션 중 오류가 발생했습니다.");
+          }
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "네트워크 오류가 발생했습니다.";
+      setBuildError(msg);
+      setWorkflow("done");
     } finally {
+      setBuildPending(false);
       setLoading(false);
     }
   }
@@ -434,7 +477,7 @@ export default function Home() {
               type="submit"
               disabled={loading || !idea.trim() || agentRunning}
             >
-              {loading ? "생성 중…" : "기획서 만들기"}
+              {loading ? "생성 중…" : "만들기"}
             </Button>
           </form>
 

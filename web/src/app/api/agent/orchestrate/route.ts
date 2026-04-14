@@ -1,11 +1,8 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
-
-const TRIGGER_TEXT = "자산관리 앱 만들어줘";
 
 type AgentRole = "design" | "coding" | "ui" | "qa";
 type AgentResult = {
@@ -19,47 +16,9 @@ type OrchestrateRequest = {
   prompt?: string;
   message?: string;
   idea?: string;
+  userId?: string;
+  projectName?: string;
 };
-
-const DESIGN_SYSTEM = `당신은 "설계 딱이"입니다.
-역할:
-- 자산관리 앱의 정보 구조, 기능 범위, 데이터 모델, API 설계를 정의합니다.
-- 결과는 개발팀이 바로 구현 가능한 수준으로 구체적으로 작성합니다.
-
-출력 형식:
-1) 목표 사용자와 핵심 시나리오
-2) 기능 목록(우선순위 포함)
-3) 데이터 모델(엔티티/필드)
-4) API 초안(엔드포인트/입출력)
-5) 구현 단계 계획`;
-
-const CODING_SYSTEM = `당신은 "코딩 딱이"입니다.
-역할:
-- 설계 문서를 바탕으로 Next.js(App Router) + TypeScript 코드 초안을 작성합니다.
-- 핵심 파일 구조와 샘플 코드(컴포넌트, 라우트, 타입)를 제시합니다.
-
-규칙:
-- 미사용 변수/미사용 import를 만들지 않습니다.
-- 실행 가능한 최소 단위 코드를 우선 제공합니다.
-- 코드가 아닌 설명은 짧게 유지합니다.`;
-
-const UI_SYSTEM = `당신은 "UI 딱이"입니다.
-역할:
-- 자산관리 앱의 UI/UX 구조와 스타일 가이드를 제안합니다.
-- 화면별 레이아웃, 컴포넌트 규칙, 디자인 토큰(색/간격/타이포)을 작성합니다.
-
-규칙:
-- 모바일/데스크톱 반응형 전략을 포함합니다.
-- 접근성(명도 대비, 키보드 네비게이션)을 반드시 포함합니다.`;
-
-const QA_SYSTEM = `당신은 "QA 딱이"입니다.
-역할:
-- 설계/코드/UI 결과를 검토해 버그, 누락, 위험 요소를 찾아 수정 제안을 만듭니다.
-- 테스트 체크리스트와 수정 우선순위를 제시합니다.
-
-규칙:
-- 심각도(높음/중간/낮음)로 분류합니다.
-- 구체적인 수정 액션을 반드시 포함합니다.`;
 
 function extractInput(body: OrchestrateRequest): string {
   const raw =
@@ -67,50 +26,82 @@ function extractInput(body: OrchestrateRequest): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
 
-function extractTextFromClaude(content: Anthropic.Messages.Message["content"]): string {
-  return content
-    .filter((block): block is Anthropic.Messages.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n\n")
-    .trim();
+function toAbsoluteUrl(req: NextRequest, path: string): string {
+  return new URL(path, req.url).toString();
 }
 
-async function runSubAgent(params: {
-  anthropic: Anthropic;
-  model: string;
-  role: AgentRole;
-  name: string;
-  system: string;
-  userContent: string;
-}): Promise<AgentResult> {
-  const res = await params.anthropic.messages.create({
-    model: params.model,
-    max_tokens: 4096,
-    system: params.system,
-    messages: [{ role: "user", content: params.userContent }],
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(status: number, message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    status === 429 ||
+    lower.includes("429") ||
+    lower.includes("rate limit")
+  );
+}
+
+async function callAgentRouteOnce<T>(
+  req: NextRequest,
+  path: string,
+  payload: unknown,
+  label: string
+): Promise<T> {
+  const res = await fetch(toAbsoluteUrl(req, path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 
-  const output = extractTextFromClaude(res.content);
-  if (!output) {
-    throw new Error(`${params.name} 응답이 비어 있습니다.`);
+  const text = await res.text();
+  let data: unknown;
+  try {
+    data = text ? (JSON.parse(text) as unknown) : {};
+  } catch {
+    throw new Error(`${label} 응답이 JSON 형식이 아닙니다. (status=${res.status})`);
   }
 
-  return {
-    role: params.role,
-    name: params.name,
-    output,
-  };
+  if (!res.ok) {
+    const message =
+      data && typeof data === "object" && "error" in data
+        ? String((data as { error?: unknown }).error ?? `${label} 실패`)
+        : `${label} 실패`;
+    if (isRateLimitError(res.status, message)) {
+      throw new Error(`[RATE_LIMIT] ${label} 실패: ${message}`);
+    }
+    throw new Error(`${label} 실패: ${message}`);
+  }
+
+  return data as T;
+}
+
+async function callAgentRoute<T>(
+  req: NextRequest,
+  path: string,
+  payload: unknown,
+  label: string
+): Promise<T> {
+  try {
+    return await callAgentRouteOnce<T>(req, path, payload, label);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes("[RATE_LIMIT]")) {
+      throw e;
+    }
+    await sleep(5000);
+    try {
+      return await callAgentRouteOnce<T>(req, path, payload, label);
+    } catch (retryError) {
+      const retryMsg =
+        retryError instanceof Error ? retryError.message : String(retryError);
+      throw new Error(`${retryMsg} (429 재시도 1회 실패)`);
+    }
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." },
-      { status: 500 }
-    );
-  }
-
   let body: OrchestrateRequest;
   try {
     body = (await req.json()) as OrchestrateRequest;
@@ -122,74 +113,109 @@ export async function POST(req: NextRequest) {
   if (!userInput) {
     return NextResponse.json({ error: "입력 문장이 필요합니다." }, { status: 400 });
   }
-  if (userInput !== TRIGGER_TEXT) {
-    return NextResponse.json(
-      { error: `현재는 "${TRIGGER_TEXT}" 입력만 지원합니다.` },
-      { status: 400 }
-    );
-  }
-
-  const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
-  const anthropic = new Anthropic({ apiKey });
 
   try {
-    const design = await runSubAgent({
-      anthropic,
-      model,
+    const designDoc = await callAgentRoute<Record<string, unknown>>(
+      req,
+      "/api/agent/design",
+      { input: userInput },
+      "설계 딱이"
+    );
+
+    await sleep(3000);
+    const codingResult = await callAgentRoute<{ files: unknown[] }>(
+      req,
+      "/api/agent/code",
+      { design: designDoc },
+      "코딩 딱이"
+    );
+
+    await sleep(3000);
+    const uiResult = await callAgentRoute<{ files: unknown[] }>(
+      req,
+      "/api/agent/ui",
+      { files: codingResult.files },
+      "UI 딱이"
+    );
+
+    await sleep(3000);
+    const qaResult = await callAgentRoute<{ files: unknown[] }>(
+      req,
+      "/api/agent/qa",
+      { files: uiResult.files },
+      "QA 딱이"
+    );
+    const qaFiles = Array.isArray(qaResult.files) ? qaResult.files : [];
+    if (qaFiles.length === 0) {
+      throw new Error("QA 결과에 배포할 파일이 없습니다.");
+    }
+
+    const designAppName =
+      typeof designDoc.appName === "string" ? designDoc.appName.trim() : "";
+    const finalProjectName =
+      (typeof body.projectName === "string" && body.projectName.trim()) ||
+      designAppName ||
+      userInput.slice(0, 40);
+    const finalUserId =
+      (typeof body.userId === "string" && body.userId.trim()) || "anonymous";
+
+    const deployResult = await callAgentRoute<{ deployUrl: string }>(
+      req,
+      "/api/deploy",
+      {
+        userId: finalUserId,
+        projectName: finalProjectName,
+        files: qaFiles,
+      },
+      "배포 단계"
+    );
+
+    const design: AgentResult = {
       role: "design",
       name: "설계 딱이",
-      system: DESIGN_SYSTEM,
-      userContent: `사용자 요청: ${userInput}`,
-    });
-
-    const [coding, ui] = await Promise.all([
-      runSubAgent({
-        anthropic,
-        model,
-        role: "coding",
-        name: "코딩 딱이",
-        system: CODING_SYSTEM,
-        userContent: `사용자 요청: ${userInput}\n\n설계 결과:\n${design.output}`,
-      }),
-      runSubAgent({
-        anthropic,
-        model,
-        role: "ui",
-        name: "UI 딱이",
-        system: UI_SYSTEM,
-        userContent: `사용자 요청: ${userInput}\n\n설계 결과:\n${design.output}`,
-      }),
-    ]);
-
-    const qa = await runSubAgent({
-      anthropic,
-      model,
+      output: JSON.stringify(designDoc, null, 2),
+    };
+    const coding: AgentResult = {
+      role: "coding",
+      name: "코딩 딱이",
+      output: JSON.stringify(codingResult, null, 2),
+    };
+    const ui: AgentResult = {
+      role: "ui",
+      name: "UI 딱이",
+      output: JSON.stringify(uiResult, null, 2),
+    };
+    const qa: AgentResult = {
       role: "qa",
       name: "QA 딱이",
-      system: QA_SYSTEM,
-      userContent: `사용자 요청: ${userInput}\n\n설계 결과:\n${design.output}\n\n코딩 결과:\n${coding.output}\n\nUI 결과:\n${ui.output}`,
-    });
+      output: JSON.stringify(qaResult, null, 2),
+    };
 
     return NextResponse.json({
       deployPlan: {
-        trigger: TRIGGER_TEXT,
-        model,
+        pipeline: [
+          "/api/agent/design",
+          "/api/agent/code",
+          "/api/agent/ui",
+          "/api/agent/qa",
+          "/api/deploy",
+        ],
       },
-      agents: {
-        design,
-        coding,
-        ui,
-        qa,
+      agents: { design, coding, ui, qa },
+      artifacts: {
+        design: designDoc,
+        coding: codingResult,
+        ui: uiResult,
+        qa: qaResult,
+        deploy: deployResult,
       },
-      finalOutput: qa.output,
+      finalOutput: {
+        deployUrl: deployResult.deployUrl,
+        projectName: finalProjectName,
+      },
+      deployUrl: deployResult.deployUrl,
     });
   } catch (e) {
-    if (e instanceof APIError) {
-      return NextResponse.json(
-        { error: e.message || "Claude API 호출 중 오류가 발생했습니다." },
-        { status: 502 }
-      );
-    }
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
       { error: `오케스트레이션 실패: ${msg}` },
