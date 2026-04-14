@@ -44,6 +44,32 @@ const AGENT_LOG_MESSAGES = [
 
 const COMPLETE_MESSAGE = "🎉 완성! 사장님의 앱이 준비됐습니다.";
 
+function pickDeployUrl(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const o = data as Record<string, unknown>;
+
+  const direct =
+    (typeof o.deployUrl === "string" && o.deployUrl) ||
+    (typeof o.deploymentUrl === "string" && o.deploymentUrl);
+  if (direct) return direct;
+
+  const response = o.response;
+  if (response && typeof response === "object") {
+    const ro = response as Record<string, unknown>;
+    if (typeof ro.deployUrl === "string" && ro.deployUrl) return ro.deployUrl;
+    if (typeof ro.deploymentUrl === "string" && ro.deploymentUrl) return ro.deploymentUrl;
+  }
+
+  const result = o.result;
+  if (result && typeof result === "object") {
+    const rr = result as Record<string, unknown>;
+    if (typeof rr.deployUrl === "string" && rr.deployUrl) return rr.deployUrl;
+    if (typeof rr.deploymentUrl === "string" && rr.deploymentUrl) return rr.deploymentUrl;
+  }
+
+  return undefined;
+}
+
 function isBriefPayload(data: unknown): data is Brief {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   const o = data as Record<string, unknown>;
@@ -153,10 +179,13 @@ export default function Home() {
             );
           }
           let data: {
+            deployUrl?: string;
             deploymentUrl?: string;
             error?: string;
             buildLog?: string[];
             repo?: { owner: string; name: string };
+            response?: { deployUrl?: string; deploymentUrl?: string };
+            result?: { deployUrl?: string; deploymentUrl?: string };
           };
           try {
             data = JSON.parse(raw) as typeof data;
@@ -166,16 +195,17 @@ export default function Home() {
           }
           const lines = Array.isArray(data.buildLog) ? data.buildLog : [];
           setBuildLogLines(lines);
+          const deployUrl = pickDeployUrl(data);
           if (!res.ok) {
-            if (typeof data.deploymentUrl === "string" && data.deploymentUrl) {
-              setPreviewUrl(data.deploymentUrl);
+            if (deployUrl) {
+              setPreviewUrl(deployUrl);
             }
             throw new Error(
               data.error || `빌드 실패 (${res.status})`
             );
           }
-          if (typeof data.deploymentUrl === "string" && data.deploymentUrl) {
-            setPreviewUrl(data.deploymentUrl);
+          if (deployUrl) {
+            setPreviewUrl(deployUrl);
           }
         } catch (e) {
           const msg =
