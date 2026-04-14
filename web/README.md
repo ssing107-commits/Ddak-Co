@@ -8,7 +8,7 @@
 cd web
 npm install
 cp .env.example .env.local
-# .env.local에 ANTHROPIC_API_KEY, GITHUB_TOKEN, VERCEL_TOKEN 등을 채운 뒤
+# .env.local에 ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_ORG, VERCEL_TOKEN, VERCEL_TEAM_ID를 채운 뒤
 npm run dev
 ```
 
@@ -21,8 +21,9 @@ npm run dev
 | `ANTHROPIC_API_KEY` | 예 | Anthropic API 키 |
 | `ANTHROPIC_MODEL` | 아니오 | 사용할 모델 ID (미설정 시 코드 기본값) |
 | `GITHUB_TOKEN` | 예 (`/api/build`) | GitHub PAT (레포 생성·푸시에 필요한 권한) |
-| `GITHUB_OWNER` | 아니오 | 레포 소유자 로그인명 또는 조직명 (미설정 시 토큰 소유 계정으로 조회) |
+| `GITHUB_ORG` | 예 | 딱코 GitHub 조직 이름 |
 | `VERCEL_TOKEN` | 예 (`/api/build`) | Vercel REST API 토큰 |
+| `VERCEL_TEAM_ID` | 예 (`/api/build`) | 딱코 Vercel Team ID |
 
 `.env.local`은 Git에 올리지 마세요. 팀·배포 환경에는 Vercel 대시보드 등에서 동일한 키 이름으로 설정합니다.
 
@@ -31,8 +32,8 @@ npm run dev
 1. [Vercel](https://vercel.com)에 로그인하고 **Add New… → Project**로 Git 저장소를 연결합니다.
 2. 저장소 루트가 `web`이 아니라 상위 폴더(예: `Ddak-Co`)인 경우, 프로젝트 설정의 **Root Directory**를 `web`으로 지정합니다.
 3. **Environment Variables**에 `.env.example`에 적힌 이름 그대로 변수를 추가합니다.  
-   - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `VERCEL_TOKEN`을 설정합니다.  
-   - `ANTHROPIC_MODEL`, `GITHUB_OWNER`는 선택입니다.
+   - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`를 설정합니다.  
+   - `ANTHROPIC_MODEL`은 선택입니다.
 4. `/api/build`는 최대 약 5분까지 실행될 수 있습니다. Vercel **Pro** 등에서 `maxDuration`이 허용하는 한도를 확인하세요(Hobby는 제한이 더 짧을 수 있습니다).
 5. **Deploy**를 누르면 `npm install` → `npm run build`가 실행되고 배포가 완료됩니다.
 

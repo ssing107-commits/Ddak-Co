@@ -79,9 +79,23 @@ export async function POST(req: NextRequest) {
   logStep(buildLog, "POST /api/build 시작");
 
   const githubToken = process.env.GITHUB_TOKEN?.trim();
+  const githubOrg = process.env.GITHUB_ORG?.trim();
+  const vercelTeamId = process.env.VERCEL_TEAM_ID?.trim();
   if (!githubToken) {
     return NextResponse.json(
       { error: "GITHUB_TOKEN이 설정되지 않았습니다.", buildLog },
+      { status: 500 }
+    );
+  }
+  if (!githubOrg) {
+    return NextResponse.json(
+      { error: "GITHUB_ORG가 설정되지 않았습니다.", buildLog },
+      { status: 500 }
+    );
+  }
+  if (!vercelTeamId) {
+    return NextResponse.json(
+      { error: "VERCEL_TEAM_ID가 설정되지 않았습니다.", buildLog },
       { status: 500 }
     );
   }
@@ -179,18 +193,7 @@ export async function POST(req: NextRequest) {
 
   // 2) GitHub에 새 repo 생성 + 단일 커밋으로 파일 업로드
   const octokit = new Octokit({ auth: githubToken });
-  let owner = process.env.GITHUB_OWNER?.trim() || "";
-  try {
-    if (!owner) {
-      const me = await octokit.users.getAuthenticated();
-      owner = me.data.login;
-    }
-  } catch {
-    // ignore
-  }
-  if (!owner) {
-    return NextResponse.json({ error: "GitHub 사용자 정보를 가져오지 못했습니다.", buildLog }, { status: 502 });
-  }
+  const owner = githubOrg;
 
   const repoName = `${slugifyRepoName(projectName)}-${randomSuffix()}`;
 
@@ -198,7 +201,8 @@ export async function POST(req: NextRequest) {
   let repoId: number | undefined;
   try {
     logStep(buildLog, `GitHub repo 생성: ${owner}/${repoName}`);
-    const created = await octokit.repos.createForAuthenticatedUser({
+    const created = await octokit.repos.createInOrg({
+      org: owner,
       name: repoName,
       private: false,
       auto_init: true,
@@ -275,14 +279,18 @@ export async function POST(req: NextRequest) {
   type VercelProjectRes = { id: string; name: string };
   type VercelDeploymentRes = { url: string; id: string };
 
-  const createProject = await vercelFetch<VercelProjectRes>(vercelToken, "/v11/projects", {
+  const createProject = await vercelFetch<VercelProjectRes>(
+    vercelToken,
+    `/v11/projects?teamId=${encodeURIComponent(vercelTeamId)}`,
+    {
     method: "POST",
     body: JSON.stringify({
       name: repoName,
       framework: "nextjs",
       gitRepository: { type: "github", repo: `${owner}/${repoName}` },
     }),
-  });
+    }
+  );
 
   if (!createProject.ok) {
     logStep(buildLog, `Vercel 프로젝트 생성 실패 status=${createProject.status}`);
@@ -293,7 +301,10 @@ export async function POST(req: NextRequest) {
   }
   logStep(buildLog, `Vercel 프로젝트 생성 완료: ${createProject.data.id}`);
 
-  const createDeployment = await vercelFetch<VercelDeploymentRes>(vercelToken, "/v13/deployments", {
+  const createDeployment = await vercelFetch<VercelDeploymentRes>(
+    vercelToken,
+    `/v13/deployments?teamId=${encodeURIComponent(vercelTeamId)}`,
+    {
     method: "POST",
     body: JSON.stringify({
       project: repoName,
@@ -308,7 +319,8 @@ export async function POST(req: NextRequest) {
         framework: "nextjs",
       },
     }),
-  });
+    }
+  );
 
   if (!createDeployment.ok) {
     logStep(buildLog, `Vercel 배포 생성 실패 status=${createDeployment.status}`);
