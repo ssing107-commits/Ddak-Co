@@ -20,12 +20,39 @@ const CODEGEN_SYSTEM = `당신은 Next.js(App Router) 초소형 프로젝트만 
 - Next.js App Router를 사용하고, 최소한 app/layout.tsx, app/page.tsx를 포함.
 - app/page.tsx는 선택된 기능을 반영한 단일 페이지(한국어 UI).
 - package.json scripts에 "dev", "build", "start" 포함.
+- 사용하지 않는 변수/함수/상태 setter(예: setWeeklyMenu)를 절대 선언하지 말 것.
+- import는 실제 사용되는 심볼만 포함하고, 미사용 import를 남기지 말 것.
+- 최종 출력 전에 스스로 "unused 변수/미사용 import가 0개인지" 점검한 뒤 결과만 출력할 것.
 - 모든 문자열은 JSON 이스케이프 규칙을 지켜 유효한 JSON이 되게 할 것.`;
 
 function stripJsonFence(text: string): string {
   let s = text.trim();
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   return s.trim();
+}
+
+function stripUnusedReactStateSetters(content: string): string {
+  const stateDecl = /const\s*\[\s*([A-Za-z_$][\w$]*)\s*,\s*(set[A-Za-z_$][\w$]*)\s*\]\s*=\s*useState\b/g;
+  let out = content;
+  let match: RegExpExecArray | null;
+  while ((match = stateDecl.exec(content)) !== null) {
+    const valueName = match[1];
+    const setterName = match[2];
+    const setterUsage = (content.match(new RegExp(`\\b${setterName}\\b`, "g")) || []).length;
+    if (setterUsage === 1) {
+      const exactDecl = new RegExp(
+        `const\\s*\\[\\s*${valueName}\\s*,\\s*${setterName}\\s*\\]\\s*=\\s*useState\\b`,
+        "g"
+      );
+      out = out.replace(exactDecl, `const [${valueName}] = useState`);
+    }
+  }
+  return out;
+}
+
+function postProcessGeneratedFile(path: string, content: string): string {
+  if (!/\.(ts|tsx)$/.test(path)) return content;
+  return stripUnusedReactStateSetters(content);
 }
 
 const ALLOWED_PREFIXES = ["package.json", "tsconfig.json", "next.config.mjs", "app/", "public/"];
@@ -173,7 +200,8 @@ export async function POST(req: NextRequest) {
       if (!it || typeof it !== "object") continue;
       const rec = it as Record<string, unknown>;
       const path = typeof rec.path === "string" ? rec.path.replace(/\\/g, "/") : "";
-      const content = typeof rec.content === "string" ? rec.content : "";
+      const contentRaw = typeof rec.content === "string" ? rec.content : "";
+      const content = postProcessGeneratedFile(path, contentRaw);
       if (!path || !content) continue;
       if (!isAllowedPath(path)) continue;
       files.push({ path, content });
