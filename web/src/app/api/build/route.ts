@@ -1,9 +1,6 @@
 import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { Octokit } from "@octokit/rest";
-import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
-
-import { authOptions } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,14 +78,11 @@ export async function POST(req: NextRequest) {
   const buildLog: BuildLog = [];
   logStep(buildLog, "POST /api/build 시작");
 
-  const session = await getServerSession(authOptions);
-  const githubToken = session?.githubAccessToken;
-  const githubLogin = session?.githubLogin;
-
+  const githubToken = process.env.GITHUB_TOKEN?.trim();
   if (!githubToken) {
     return NextResponse.json(
-      { error: "GitHub 로그인이 필요합니다.", buildLog },
-      { status: 401 }
+      { error: "GITHUB_TOKEN이 설정되지 않았습니다.", buildLog },
+      { status: 500 }
     );
   }
 
@@ -185,7 +179,7 @@ export async function POST(req: NextRequest) {
 
   // 2) GitHub에 새 repo 생성 + 단일 커밋으로 파일 업로드
   const octokit = new Octokit({ auth: githubToken });
-  let owner = githubLogin;
+  let owner = process.env.GITHUB_OWNER?.trim() || "";
   try {
     if (!owner) {
       const me = await octokit.users.getAuthenticated();

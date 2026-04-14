@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { signIn, signOut, useSession } from "next-auth/react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -61,9 +60,6 @@ function isBriefPayload(data: unknown): data is Brief {
 }
 
 export default function Home() {
-  const { data: session, status } = useSession();
-  const signedIn = status === "authenticated";
-
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,15 +114,6 @@ export default function Home() {
 
   function startAgentRun() {
     if (!brief) return;
-    if (!signedIn) {
-      void signIn("github", {
-        callbackUrl:
-          typeof window !== "undefined"
-            ? window.location.href
-            : "/",
-      });
-      return;
-    }
 
     const selected = brief.features.filter((_, i) => featureChecked[i]);
     if (selected.length === 0) return;
@@ -377,16 +364,6 @@ export default function Home() {
           </CardContent>
           <CardFooter className="justify-between text-xs text-muted-foreground">
             <span>나중에 localStorage에서 값을 지우면 다시 선택할 수 있습니다.</span>
-            {!signedIn && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => signIn("github")}
-              >
-                GitHub 로그인
-              </Button>
-            )}
           </CardFooter>
         </Card>
       </div>
@@ -397,9 +374,6 @@ export default function Home() {
   const anyFeatureSelected = featureChecked.some(Boolean);
   const logsComplete =
     logMessages.length >= AGENT_LOG_MESSAGES.length;
-  const userLabel =
-    session?.user?.name || session?.user?.email || session?.githubLogin;
-
   return (
     <div className="min-h-full bg-background px-4 py-10 lg:py-12">
       <div
@@ -412,25 +386,7 @@ export default function Home() {
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">
               딱코
             </h1>
-            {signedIn ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => signOut()}
-              >
-                {userLabel ? `${userLabel} (로그아웃)` : "로그아웃"}
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => signIn("github")}
-              >
-                GitHub 로그인
-              </Button>
-            )}
+
           </div>
 
           <form onSubmit={onSubmit} className="flex flex-col gap-3">
