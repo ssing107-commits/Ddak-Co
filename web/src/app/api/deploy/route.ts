@@ -93,13 +93,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+  const userId =
+    typeof body.userId === "string" && body.userId.trim()
+      ? body.userId.trim()
+      : "anonymous";
   const projectName = typeof body.projectName === "string" ? body.projectName.trim() : "";
   const files = Array.isArray(body.files) ? normalizeFiles(body.files) : [];
 
-  if (!userId) {
-    return NextResponse.json({ error: "userId가 필요합니다." }, { status: 400 });
-  }
   if (!projectName) {
     return NextResponse.json({ error: "projectName이 필요합니다." }, { status: 400 });
   }
@@ -156,11 +156,8 @@ export async function POST(req: NextRequest) {
   try {
     await insertDeploymentRow({ userId, projectName, deployUrl });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { error: `배포 기록 저장 실패: ${msg}` },
-      { status: 502 }
-    );
+    console.error("[deploy] Supabase 저장 실패 (무시):", e);
+    // 저장 실패해도 배포 성공으로 처리
   }
 
   return NextResponse.json({ deployUrl });
