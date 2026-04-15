@@ -1,5 +1,6 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
+
+import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
 
 /** Vercel Pro 등에서 Claude 응답 대기 시간 확보. Hobby는 플랜상 최대 10초라 초과 시 HTML 502가 날 수 있음. */
 export const maxDuration = 60;
@@ -26,7 +27,7 @@ function stripJsonFence(text: string): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = getAnthropicApiKeyFromEnv();
     if (!apiKey) {
       return NextResponse.json(
         { error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." },
@@ -63,10 +64,9 @@ export async function POST(req: NextRequest) {
     const model =
       process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
 
-    const anthropic = new Anthropic({ apiKey });
-
     try {
-    const msg = await anthropic.messages.create({
+    const { text } = await callAnthropicMessages({
+      apiKey,
       model,
       max_tokens: 3072,
       system: SYSTEM,
@@ -80,15 +80,14 @@ export async function POST(req: NextRequest) {
       ],
     });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
+    if (!text) {
       return NextResponse.json(
         { error: "모델 응답을 처리할 수 없습니다." },
         { status: 502 }
       );
     }
 
-    const raw = stripJsonFence(block.text);
+    const raw = stripJsonFence(text);
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -139,29 +138,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ projectName, features, timeline });
   } catch (e) {
     console.error(e);
-    if (e instanceof APIError) {
-      if (e.status === 401) {
-        return NextResponse.json(
-          { error: "API 키가 유효하지 않습니다." },
-          { status: 401 }
-        );
-      }
-      if (e.status === 404 || e.status === 400) {
-        return NextResponse.json(
-          {
-            error:
-              "모델 이름을 확인해 주세요. ANTHROPIC_MODEL 환경 변수를 올바른 모델 ID로 설정하세요.",
-          },
-          { status: 400 }
-        );
-      }
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("(HTTP 401)")) {
       return NextResponse.json(
-        { error: e.message || "Claude API 오류가 발생했습니다." },
-        { status: 502 }
+        { error: "API 키가 유효하지 않습니다. (x-api-key 확인)" },
+        { status: 401 }
+      );
+    }
+    if (msg.includes("(HTTP 404)") || msg.includes("(HTTP 400)")) {
+      return NextResponse.json(
+        {
+          error:
+            "모델 이름을 확인해 주세요. ANTHROPIC_MODEL 환경 변수를 올바른 모델 ID로 설정하세요.",
+        },
+        { status: 400 }
       );
     }
     return NextResponse.json(
-      { error: "알 수 없는 오류가 발생했습니다." },
+      { error: msg || "Claude API 오류가 발생했습니다." },
       { status: 502 }
     );
     }

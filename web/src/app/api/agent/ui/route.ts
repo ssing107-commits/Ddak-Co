@@ -1,5 +1,6 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
+
+import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,7 +98,7 @@ function postProcessFiles(files: FileItem[]): FileItem[] {
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const apiKey = getAnthropicApiKeyFromEnv();
   if (!apiKey) {
     return NextResponse.json(
       { error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." },
@@ -121,10 +122,10 @@ export async function POST(req: NextRequest) {
   }
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
-  const anthropic = new Anthropic({ apiKey });
 
   try {
-    const res = await anthropic.messages.create({
+    const { text } = await callAnthropicMessages({
+      apiKey,
       model,
       max_tokens: 16384,
       system: SYSTEM_PROMPT,
@@ -140,14 +141,13 @@ export async function POST(req: NextRequest) {
       ],
     });
 
-    const textBlock = res.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
+    if (!text) {
       return NextResponse.json({ error: "UI 개선 응답을 처리할 수 없습니다." }, { status: 502 });
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(stripJsonFence(textBlock.text));
+      parsed = JSON.parse(stripJsonFence(text));
     } catch {
       return NextResponse.json({ error: "UI 개선 응답 JSON 파싱에 실패했습니다." }, { status: 502 });
     }
@@ -159,13 +159,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ files: postProcessFiles(improvedFiles) });
   } catch (e) {
-    if (e instanceof APIError) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("(HTTP 401)")) {
       return NextResponse.json(
-        { error: e.message || "Claude API 오류가 발생했습니다." },
-        { status: 502 }
+        { error: "Anthropic API 키가 유효하지 않습니다. (x-api-key 확인)" },
+        { status: 401 }
       );
     }
-    const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: `UI 에이전트 실행 실패: ${msg}` }, { status: 502 });
   }
 }

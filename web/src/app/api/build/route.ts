@@ -1,6 +1,7 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
 import { Octokit } from "@octokit/rest";
 import { NextRequest, NextResponse } from "next/server";
+
+import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const anthropicKey = getAnthropicApiKeyFromEnv();
   const vercelToken = process.env.VERCEL_TOKEN;
   if (!anthropicKey) {
     return NextResponse.json(
@@ -164,12 +165,12 @@ export async function POST(req: NextRequest) {
 
   // 1) Claude로 코드 생성
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
-  const anthropic = new Anthropic({ apiKey: anthropicKey });
   let files: { path: string; content: string }[] = [];
 
   try {
     logStep(buildLog, `Claude 코드 생성 시작 (model=${model})`);
-    const msg = await anthropic.messages.create({
+    const { text } = await callAnthropicMessages({
+      apiKey: anthropicKey,
       model,
       max_tokens: 16384,
       system: CODEGEN_SYSTEM,
@@ -189,11 +190,10 @@ export async function POST(req: NextRequest) {
       ],
     });
 
-    const block = msg.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") {
+    if (!text) {
       return NextResponse.json({ error: "코드 생성 응답 처리 실패", buildLog }, { status: 502 });
     }
-    const raw = stripJsonFence(block.text);
+    const raw = stripJsonFence(text);
     const parsed = JSON.parse(raw) as { files?: unknown[] };
     const rawFiles = Array.isArray(parsed.files) ? parsed.files : [];
     for (const it of rawFiles) {
@@ -213,10 +213,10 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     logStep(buildLog, `Claude 오류: ${msg}`);
-    if (e instanceof APIError) {
-      return NextResponse.json({ error: e.message || "Claude API 오류", buildLog }, { status: 502 });
-    }
-    return NextResponse.json({ error: "코드 생성 중 오류가 발생했습니다.", buildLog }, { status: 502 });
+    return NextResponse.json(
+      { error: msg || "코드 생성 중 오류가 발생했습니다.", buildLog },
+      { status: 502 }
+    );
   }
 
   // 2) GitHub에 새 repo 생성 + 단일 커밋으로 파일 업로드
