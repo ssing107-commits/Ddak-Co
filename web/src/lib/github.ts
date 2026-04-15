@@ -76,7 +76,7 @@ export async function createRepo(
     method: "POST",
     body: JSON.stringify({
       name: trimmedName,
-      private: true,
+      private: false,
       auto_init: true,
     }),
   });
