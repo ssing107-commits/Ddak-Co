@@ -1,3 +1,4 @@
+import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
@@ -9,9 +10,13 @@ export const maxDuration = 180;
 const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 입력으로 받은 앱 설계서를 바탕으로 Next.js 14 App Router 프로젝트 코드를 완성하세요.
 
-반드시 아래 JSON만 출력하세요. 마크다운/설명/코드블록 금지.
-{"files":[{"path":"파일경로","content":"파일전체내용"},...]}
-반드시 JSON만 반환하세요. 설명 텍스트나 마크다운 없이 { "files": [...] } 형태로만.
+반드시 아래 형태의 JSON 한 덩어리만 출력하세요. 마크다운 코드블록·설명 문장 없이 순수 JSON만 출력하세요.
+{"files":[{"path":"파일경로","content":"BASE64_UTF8"},...]}
+
+중요 — content 필드:
+- 각 파일의 실제 소스는 UTF-8 바이트 시퀀스로 만든 뒤, 그 바이트를 base64로 인코딩한 **한 줄짜리 문자열**만 넣으세요.
+- content에 소스 코드를 그대로(따옴표·백슬래시·줄바꿈 포함) 넣지 마세요. JSON 이스케이프 실패를 막기 위함입니다.
+- base64 문자열에는 공백/줄바꿈을 넣지 마세요.
 
 규칙:
 - Next.js 14 App Router 구조를 사용
@@ -20,8 +25,7 @@ const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 - UI 텍스트는 한국어
 - 모바일 우선 반응형
 - path는 프로젝트 루트 기준 상대 경로
-- 최소 포함 파일: app/layout.tsx, app/page.tsx
-- content는 파일 전체 내용을 담아야 함`;
+- 최소 포함 파일: app/layout.tsx, app/page.tsx`;
 
 type CodeRequest = {
   design?: unknown;
@@ -34,17 +38,33 @@ type GeneratedFile = {
   content: string;
 };
 
-function stripJsonFence(text: string): string {
-  let s = text.trim();
-  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  return s.trim();
+/** 응답 맨 앞에 붙는 ```json / ``` 마크다운 펜스를 반복 제거 */
+function preprocessStripMarkdownJsonFence(text: string): string {
+  let t = text.trim();
+  let prev = "";
+  while (prev !== t) {
+    prev = t;
+    t = t.replace(/^```(?:json)?\s*\r?\n?/i, "").replace(/\r?\n?\s*```\s*$/i, "").trim();
+  }
+  return t;
 }
 
-function getDebugSnippet(text: string, length = 500): string {
-  return text.slice(0, length).replace(/\s+/g, " ").trim();
+function formatParseError(e: unknown): string {
+  if (e instanceof Error) {
+    return `${e.name}: ${e.message}${e.stack ? `\n${e.stack}` : ""}`;
+  }
+  return String(e);
 }
 
-function extractJsonCandidates(text: string): string[] {
+/** 펜스가 열린 채 닫히지 않은 경우 등: 첫 { ~ 마지막 } 구간 추출 */
+function extractBalancedJsonObjectFallback(text: string): string | null {
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first < 0 || last <= first) return null;
+  return text.slice(first, last + 1);
+}
+
+function extractJsonCandidates(originalRaw: string, preprocessed: string): string[] {
   const candidates: string[] = [];
   const pushUnique = (value: string) => {
     const v = value.trim();
@@ -52,49 +72,67 @@ function extractJsonCandidates(text: string): string[] {
     if (!candidates.includes(v)) candidates.push(v);
   };
 
-  // 1) ```json ... ``` 블록
   const jsonFence = /```json\s*([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
-  while ((match = jsonFence.exec(text)) !== null) {
+  while ((match = jsonFence.exec(originalRaw)) !== null) {
     pushUnique(match[1]);
   }
 
-  // 2) 일반 ``` ... ``` 블록
   const genericFence = /```\s*([\s\S]*?)```/gi;
-  while ((match = genericFence.exec(text)) !== null) {
+  while ((match = genericFence.exec(originalRaw)) !== null) {
     pushUnique(match[1]);
   }
 
-  // 3) 전체 텍스트 그대로
-  pushUnique(text);
+  pushUnique(preprocessStripMarkdownJsonFence(preprocessed));
+  pushUnique(preprocessed);
 
-  // 4) fence 제거한 텍스트
-  pushUnique(stripJsonFence(text));
+  const bracePre = extractBalancedJsonObjectFallback(preprocessed);
+  if (bracePre) pushUnique(bracePre);
 
-  // 5) 첫 '{' ~ 마지막 '}' 범위
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    pushUnique(text.slice(firstBrace, lastBrace + 1));
-  }
+  const braceOrig = extractBalancedJsonObjectFallback(originalRaw);
+  if (braceOrig) pushUnique(braceOrig);
 
   return candidates;
 }
 
-function parseClaudeJsonWithRecovery(text: string): unknown {
-  const candidates = extractJsonCandidates(text);
-  let lastError: unknown = null;
+function tryParseJsonOnce(candidate: string): unknown {
+  return JSON.parse(candidate);
+}
 
-  for (const candidate of candidates) {
+function tryParseJsonAfterRepair(candidate: string): unknown {
+  const repaired = jsonrepair(candidate);
+  return JSON.parse(repaired);
+}
+
+function parseClaudeJsonWithRecovery(rawText: string): unknown {
+  const preprocessed = preprocessStripMarkdownJsonFence(rawText);
+  const candidates = extractJsonCandidates(rawText, preprocessed);
+  const attemptErrors: string[] = [];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const label = `#${i + 1}`;
     try {
-      return JSON.parse(candidate);
-    } catch (e) {
-      lastError = e;
+      return tryParseJsonOnce(candidate);
+    } catch (e1) {
+      try {
+        return tryParseJsonAfterRepair(candidate);
+      } catch (e2) {
+        attemptErrors.push(
+          `${label} candidate(앞 400자): ${candidate.slice(0, 400).replace(/\s+/g, " ")}\n` +
+            `  JSON.parse: ${formatParseError(e1)}\n` +
+            `  jsonrepair+JSON.parse: ${formatParseError(e2)}`
+        );
+      }
     }
   }
 
-  const detail = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(`코드 생성 응답 JSON 파싱에 실패했습니다. raw(앞 500자): ${getDebugSnippet(text)} / parseError: ${detail}`);
+  const rawHead = rawText.slice(0, 1500);
+  throw new Error(
+    `코드 생성 응답 JSON 파싱에 실패했습니다.\n` +
+      `시도별 parseError(전체):\n${attemptErrors.join("\n---\n")}\n` +
+      `raw(앞 1500자):\n${rawHead}`
+  );
 }
 
 function extractDesignInput(body: CodeRequest): unknown {
@@ -103,15 +141,46 @@ function extractDesignInput(body: CodeRequest): unknown {
   return body.input;
 }
 
+/** 프롬프트 기준(base64)과 구 모델(평문) 호환: 거의 base64 알파벳이면 디코딩 */
+function likelyBase64Payload(s: string): boolean {
+  const t = s.replace(/\s/g, "");
+  if (t.length < 4 || t.length % 4 === 1) return false;
+  let ok = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (
+      (c >= 48 && c <= 57) ||
+      (c >= 65 && c <= 90) ||
+      (c >= 97 && c <= 122) ||
+      c === 43 ||
+      c === 47 ||
+      c === 61
+    ) {
+      ok++;
+    }
+  }
+  return ok / t.length > 0.97;
+}
+
+function decodeFileContentField(raw: string): string {
+  if (!likelyBase64Payload(raw)) {
+    return raw;
+  }
+  const compact = raw.replace(/\s/g, "");
+  return Buffer.from(compact, "base64").toString("utf-8");
+}
+
 function normalizeFiles(raw: unknown): GeneratedFile[] {
   const list = Array.isArray(raw) ? raw : [];
   return list
     .filter((f) => f && typeof f === "object" && !Array.isArray(f))
     .map((f) => {
       const rec = f as Record<string, unknown>;
+      const path = typeof rec.path === "string" ? rec.path.trim().replace(/\\/g, "/") : "";
+      const rawContent = typeof rec.content === "string" ? rec.content : "";
       return {
-        path: typeof rec.path === "string" ? rec.path.trim().replace(/\\/g, "/") : "",
-        content: typeof rec.content === "string" ? rec.content : "",
+        path,
+        content: decodeFileContentField(rawContent),
       };
     })
     .filter((f) => f.path && f.content);
@@ -181,11 +250,10 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.\n\n${JSON.stringify(
-            design,
-            null,
-            2
-          )}`,
+          content: `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.
+각 files[].content는 해당 파일 UTF-8 본문의 base64(공백 없이)만 넣으세요. 마크다운으로 감싸지 마세요.
+
+${JSON.stringify(design, null, 2)}`,
         },
       ],
     });
