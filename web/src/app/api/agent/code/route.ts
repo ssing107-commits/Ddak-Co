@@ -31,7 +31,8 @@ content 값은 이스케이프된 문자열로 작성하세요.
 - UI 텍스트는 한국어
 - 모바일 우선 반응형
 - path는 프로젝트 루트 기준 상대 경로
-- 최소 포함 파일: app/layout.tsx, app/page.tsx`;
+- 최소 포함 파일: app/layout.tsx, app/page.tsx
+- 반드시 package.json을 포함하고, dependencies에 next, react, react-dom을 넣을 것`;
 
 type CodeRequest = {
   design?: unknown;
@@ -265,6 +266,16 @@ ${JSON.stringify(design, null, 2)}`,
     const files = normalizeFiles((parsed as { files?: unknown })?.files);
     if (files.length === 0) {
       return NextResponse.json({ error: "생성된 파일이 없습니다." }, { status: 502 });
+    }
+    const packageJson = files.find((f) => f.path === "package.json")?.content ?? "";
+    if (!packageJson) {
+      return NextResponse.json({ error: "필수 파일(package.json)이 누락되었습니다." }, { status: 502 });
+    }
+    if (!/\"next\"\s*:/.test(packageJson) || !/\"react\"\s*:/.test(packageJson) || !/\"react-dom\"\s*:/.test(packageJson)) {
+      return NextResponse.json(
+        { error: "package.json dependencies에 next/react/react-dom이 필요합니다." },
+        { status: 502 }
+      );
     }
     if (!files.some((f) => f.path === "app/layout.tsx") || !files.some((f) => f.path === "app/page.tsx")) {
       return NextResponse.json(

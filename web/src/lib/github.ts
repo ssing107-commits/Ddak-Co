@@ -88,6 +88,12 @@ export async function createRepo(
 }
 
 export async function pushCode(repoName: string, files: GitHubFile[]): Promise<void> {
+  console.log("[github] 업로드 파일 목록:", files.map((f) => f.path));
+  console.log(
+    "[github] package.json content 앞 200자:",
+    files.find((f) => f.path === "package.json")?.content?.slice(0, 200)
+  );
+
   const org = getRequiredEnv("GITHUB_ORG");
   const trimmedName = repoName.trim();
   if (!trimmedName) {
