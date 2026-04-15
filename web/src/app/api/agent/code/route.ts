@@ -10,6 +10,7 @@ const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 
 반드시 아래 JSON만 출력하세요. 마크다운/설명/코드블록 금지.
 {"files":[{"path":"파일경로","content":"파일전체내용"},...]}
+반드시 JSON만 반환하세요. 설명 텍스트나 마크다운 없이 { "files": [...] } 형태로만.
 
 규칙:
 - Next.js 14 App Router 구조를 사용
@@ -36,6 +37,63 @@ function stripJsonFence(text: string): string {
   let s = text.trim();
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   return s.trim();
+}
+
+function getDebugSnippet(text: string, length = 500): string {
+  return text.slice(0, length).replace(/\s+/g, " ").trim();
+}
+
+function extractJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  const pushUnique = (value: string) => {
+    const v = value.trim();
+    if (!v) return;
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+
+  // 1) ```json ... ``` 블록
+  const jsonFence = /```json\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = jsonFence.exec(text)) !== null) {
+    pushUnique(match[1]);
+  }
+
+  // 2) 일반 ``` ... ``` 블록
+  const genericFence = /```\s*([\s\S]*?)```/gi;
+  while ((match = genericFence.exec(text)) !== null) {
+    pushUnique(match[1]);
+  }
+
+  // 3) 전체 텍스트 그대로
+  pushUnique(text);
+
+  // 4) fence 제거한 텍스트
+  pushUnique(stripJsonFence(text));
+
+  // 5) 첫 '{' ~ 마지막 '}' 범위
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    pushUnique(text.slice(firstBrace, lastBrace + 1));
+  }
+
+  return candidates;
+}
+
+function parseClaudeJsonWithRecovery(text: string): unknown {
+  const candidates = extractJsonCandidates(text);
+  let lastError: unknown = null;
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`코드 생성 응답 JSON 파싱에 실패했습니다. raw(앞 500자): ${getDebugSnippet(text)} / parseError: ${detail}`);
 }
 
 function extractDesignInput(body: CodeRequest): unknown {
@@ -138,9 +196,11 @@ export async function POST(req: NextRequest) {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(stripJsonFence(textBlock.text));
-    } catch {
-      return NextResponse.json({ error: "코드 생성 응답 JSON 파싱에 실패했습니다." }, { status: 502 });
+      parsed = parseClaudeJsonWithRecovery(textBlock.text);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[api/agent/code] JSON parse failure:", msg);
+      return NextResponse.json({ error: msg }, { status: 502 });
     }
 
     const files = normalizeFiles((parsed as { files?: unknown })?.files);
