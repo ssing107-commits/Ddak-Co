@@ -11,6 +11,15 @@ type StreamRequest = {
   idea?: string;
   userId?: string;
   projectName?: string;
+  designDoc?: unknown;
+  selectedFeatures?: unknown;
+};
+
+type DesignDoc = {
+  appName: string;
+  coreFeatures: string[];
+  pages: Array<{ name: string; purpose: string }>;
+  dataStructure: Array<{ entity: string; fields: string[] }>;
 };
 
 function extractInput(body: StreamRequest): string {
@@ -97,6 +106,62 @@ function sseEvent(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
+function parseDesignDoc(raw: unknown): DesignDoc | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const appName = typeof o.appName === "string" ? o.appName.trim() : "";
+  const coreFeatures = Array.isArray(o.coreFeatures)
+    ? o.coreFeatures
+        .filter((f): f is string => typeof f === "string")
+        .map((f) => f.trim())
+        .filter(Boolean)
+    : [];
+  const pages = Array.isArray(o.pages)
+    ? o.pages
+        .filter((p) => p && typeof p === "object" && !Array.isArray(p))
+        .map((p) => {
+          const rec = p as Record<string, unknown>;
+          return {
+            name: typeof rec.name === "string" ? rec.name.trim() : "",
+            purpose: typeof rec.purpose === "string" ? rec.purpose.trim() : "",
+          };
+        })
+        .filter((p) => p.name && p.purpose)
+    : [];
+  const dataStructure = Array.isArray(o.dataStructure)
+    ? o.dataStructure
+        .filter((e) => e && typeof e === "object" && !Array.isArray(e))
+        .map((e) => {
+          const rec = e as Record<string, unknown>;
+          const fields = Array.isArray(rec.fields)
+            ? rec.fields
+                .filter((f): f is string => typeof f === "string")
+                .map((f) => f.trim())
+                .filter(Boolean)
+            : [];
+          return {
+            entity: typeof rec.entity === "string" ? rec.entity.trim() : "",
+            fields,
+          };
+        })
+        .filter((e) => e.entity && e.fields.length > 0)
+    : [];
+
+  if (!appName || coreFeatures.length === 0 || pages.length === 0 || dataStructure.length === 0) {
+    return null;
+  }
+
+  return { appName, coreFeatures, pages, dataStructure };
+}
+
+function parseSelectedFeatures(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((f): f is string => typeof f === "string")
+    .map((f) => f.trim())
+    .filter(Boolean);
+}
+
 export async function POST(req: NextRequest) {
   let body: StreamRequest;
   try {
@@ -109,9 +174,11 @@ export async function POST(req: NextRequest) {
   }
 
   const userInput = extractInput(body);
-  if (!userInput) {
+  const requestedDesign = parseDesignDoc(body.designDoc);
+  const requestedFeatures = parseSelectedFeatures(body.selectedFeatures);
+  if (!requestedDesign && !userInput) {
     return new Response(
-      JSON.stringify({ error: "입력 문장이 필요합니다." }),
+      JSON.stringify({ error: "입력 문장 또는 designDoc이 필요합니다." }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -124,13 +191,25 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        send({ type: "status", message: "설계 중..." });
-        const designDoc = await callJsonRoute<Record<string, unknown>>(
-          req,
-          "/api/agent/design",
-          { input: userInput },
-          "설계 딱이"
-        );
+        let designDoc: DesignDoc;
+        if (requestedDesign) {
+          const selected = requestedFeatures.length > 0 ? requestedFeatures : requestedDesign.coreFeatures;
+          designDoc = { ...requestedDesign, coreFeatures: selected };
+        } else {
+          send({ type: "status", message: "설계 중..." });
+          const generatedDesign = await callJsonRoute<DesignDoc>(
+            req,
+            "/api/agent/design",
+            { input: userInput },
+            "설계 딱이"
+          );
+          const selected = requestedFeatures.length > 0 ? requestedFeatures : generatedDesign.coreFeatures;
+          designDoc = { ...generatedDesign, coreFeatures: selected };
+        }
+
+        if (designDoc.coreFeatures.length === 0) {
+          throw new Error("선택된 기능이 없어 다음 단계를 시작할 수 없습니다.");
+        }
 
         await sleep(3000);
         send({ type: "status", message: "코딩 중..." });

@@ -1,7 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
+import {
+  EditableFeature,
+  FeatureSelectionCards,
+} from "@/components/feature-selection-cards";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,20 +15,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-
-type FeatureItem = {
-  title: string;
-  description: string;
-};
-
-type Brief = {
-  projectName: string;
-  features: FeatureItem[];
-  timeline: string;
-};
 
 type WorkflowPhase = "brief" | "agents" | "done";
+type DesignDoc = {
+  appName: string;
+  coreFeatures: string[];
+  pages: Array<{ name: string; purpose: string }>;
+  dataStructure: Array<{ entity: string; fields: string[] }>;
+};
+
 const ROLE_STORAGE_KEY = "ddakco:user-role";
 const ROLE_OPTIONS = [
   { id: "solo-founder", label: "개인사업자 / 1인 창업자", emoji: "👤" },
@@ -33,15 +32,6 @@ const ROLE_OPTIONS = [
   { id: "finance", label: "재무팀 / 회계팀", emoji: "💰" },
   { id: "marketing", label: "마케팅팀", emoji: "📣" },
 ] as const;
-
-const AGENT_LOG_MESSAGES = [
-  "📋 PM이 기획서를 검토하고 있습니다...",
-  "🎨 디자인 에이전트가 UI를 설계 중입니다...",
-  "⚙️ 백엔드 에이전트가 데이터 구조를 설계 중입니다...",
-  "💻 프론트엔드 에이전트가 화면을 개발 중입니다...",
-  "✅ QA 에이전트가 검토 완료했습니다! 곧 완성됩니다.",
-] as const;
-
 const COMPLETE_MESSAGE = "🎉 완성! 사장님의 앱이 준비됐습니다.";
 
 function pickDeployUrl(data: unknown): string | undefined {
@@ -57,48 +47,87 @@ function pickDeployUrl(data: unknown): string | undefined {
   if (response && typeof response === "object") {
     const ro = response as Record<string, unknown>;
     if (typeof ro.deployUrl === "string" && ro.deployUrl) return ro.deployUrl;
-    if (typeof ro.deploymentUrl === "string" && ro.deploymentUrl) return ro.deploymentUrl;
+    if (typeof ro.deploymentUrl === "string" && ro.deploymentUrl) {
+      return ro.deploymentUrl;
+    }
   }
 
   const result = o.result;
   if (result && typeof result === "object") {
     const rr = result as Record<string, unknown>;
     if (typeof rr.deployUrl === "string" && rr.deployUrl) return rr.deployUrl;
-    if (typeof rr.deploymentUrl === "string" && rr.deploymentUrl) return rr.deploymentUrl;
+    if (typeof rr.deploymentUrl === "string" && rr.deploymentUrl) {
+      return rr.deploymentUrl;
+    }
   }
 
   return undefined;
 }
 
-function isBriefPayload(data: unknown): data is Brief {
+function isDesignPayload(data: unknown): data is DesignDoc {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   const o = data as Record<string, unknown>;
-  if (typeof o.projectName !== "string" || typeof o.timeline !== "string")
+  if (typeof o.appName !== "string") return false;
+  if (
+    !Array.isArray(o.coreFeatures) ||
+    !o.coreFeatures.every((f) => typeof f === "string")
+  ) {
     return false;
-  if (!Array.isArray(o.features) || o.features.length !== 5) return false;
-  return o.features.every(
-    (f) =>
-      f &&
-      typeof f === "object" &&
-      typeof (f as FeatureItem).title === "string" &&
-      typeof (f as FeatureItem).description === "string"
-  );
+  }
+  if (
+    !Array.isArray(o.pages) ||
+    !o.pages.every(
+      (p) =>
+        p &&
+        typeof p === "object" &&
+        typeof (p as { name?: unknown }).name === "string" &&
+        typeof (p as { purpose?: unknown }).purpose === "string"
+    )
+  ) {
+    return false;
+  }
+  if (
+    !Array.isArray(o.dataStructure) ||
+    !o.dataStructure.every(
+      (d) =>
+        d &&
+        typeof d === "object" &&
+        typeof (d as { entity?: unknown }).entity === "string" &&
+        Array.isArray((d as { fields?: unknown[] }).fields)
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function buildEditableFeatures(features: string[]): EditableFeature[] {
+  const stamp = Date.now().toString(36);
+  return features.map((feature, i) => ({
+    id: `${stamp}-${i}`,
+    text: feature,
+    checked: true,
+  }));
+}
+
+function pickSelectedFeatures(features: EditableFeature[]): string[] {
+  return features
+    .filter((f) => f.checked)
+    .map((f) => f.text.trim())
+    .filter(Boolean);
 }
 
 export default function Home() {
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [brief, setBrief] = useState<Brief | null>(null);
-  const [featureChecked, setFeatureChecked] = useState<boolean[]>([]);
+  const [designDoc, setDesignDoc] = useState<DesignDoc | null>(null);
+  const [featureDrafts, setFeatureDrafts] = useState<EditableFeature[]>([]);
   const [workflow, setWorkflow] = useState<WorkflowPhase>("brief");
   const [logMessages, setLogMessages] = useState<string[]>([]);
-  const [runId, setRunId] = useState(0);
-  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [buildPending, setBuildPending] = useState(false);
-  const [buildLogLines, setBuildLogLines] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [roleReady, setRoleReady] = useState(false);
   const [customRoleInput, setCustomRoleInput] = useState("");
@@ -117,118 +146,11 @@ export default function Home() {
     setUserRole(role);
   }
 
-  useEffect(() => {
-    if (runId === 0) return;
-
-    timeoutsRef.current.forEach(clearTimeout);
-    timeoutsRef.current = [];
-
-    setLogMessages([]);
-
-    AGENT_LOG_MESSAGES.forEach((msg, i) => {
-      const id = setTimeout(() => {
-        setLogMessages((prev) => [...prev, msg]);
-      }, i * 1000);
-      timeoutsRef.current.push(id);
-    });
-
-    return () => {
-      timeoutsRef.current.forEach(clearTimeout);
-      timeoutsRef.current = [];
-    };
-  }, [runId]);
-
-  function startAgentRun() {
-    if (!brief) return;
-
-    const selected = brief.features.filter((_, i) => featureChecked[i]);
-    if (selected.length === 0) return;
-
-    setWorkflow("agents");
-    setPreviewUrl(null);
-    setBuildError(null);
-    setBuildLogLines([]);
-    setBuildPending(true);
-    setRunId((n) => n + 1);
-
-    const minMs = AGENT_LOG_MESSAGES.length * 1000;
-
-    void (async () => {
-      const animDone = new Promise<void>((resolve) => {
-        setTimeout(resolve, minMs);
-      });
-
-      const buildDone = (async () => {
-        try {
-          const res = await fetch("/api/build", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              projectName: brief.projectName,
-              features: selected,
-              originalIdea: idea.trim() || undefined,
-            }),
-            signal: AbortSignal.timeout(280_000),
-          });
-          const raw = await res.text();
-          const ct = res.headers.get("content-type") ?? "";
-          if (!ct.includes("application/json")) {
-            setBuildLogLines([]);
-            throw new Error(
-              `빌드 API가 JSON이 아닌 응답을 반환했습니다 (${res.status}).`
-            );
-          }
-          let data: {
-            deployUrl?: string;
-            deploymentUrl?: string;
-            error?: string;
-            buildLog?: string[];
-            repo?: { owner: string; name: string };
-            response?: { deployUrl?: string; deploymentUrl?: string };
-            result?: { deployUrl?: string; deploymentUrl?: string };
-          };
-          try {
-            data = JSON.parse(raw) as typeof data;
-          } catch {
-            setBuildLogLines([]);
-            throw new Error("빌드 응답 JSON 파싱에 실패했습니다.");
-          }
-          const lines = Array.isArray(data.buildLog) ? data.buildLog : [];
-          setBuildLogLines(lines);
-          const deployUrl = pickDeployUrl(data);
-          if (!res.ok) {
-            if (deployUrl) {
-              setPreviewUrl(deployUrl);
-            }
-            throw new Error(
-              data.error || `빌드 실패 (${res.status})`
-            );
-          }
-          if (deployUrl) {
-            setPreviewUrl(deployUrl);
-          }
-        } catch (e) {
-          const msg =
-            e instanceof Error ? e.message : "알 수 없는 오류가 발생했습니다.";
-          setBuildError(msg);
-        } finally {
-          setBuildPending(false);
-        }
-      })();
-
-      await Promise.all([animDone, buildDone]);
-      setWorkflow("done");
-    })();
-  }
-
   function backToBrief() {
-    timeoutsRef.current.forEach(clearTimeout);
-    timeoutsRef.current = [];
     setWorkflow("brief");
     setLogMessages([]);
     setPreviewUrl(null);
     setBuildError(null);
-    setBuildLogLines([]);
     setBuildPending(false);
   }
 
@@ -237,16 +159,66 @@ export default function Home() {
     const input = idea.trim();
     if (!input) return;
 
+    setLoading(true);
     setError(null);
-    setBrief(null);
-    setFeatureChecked([]);
-    setWorkflow("agents");
+    setBuildError(null);
+    setPreviewUrl(null);
+    setBuildPending(false);
     setLogMessages([]);
+    setDesignDoc(null);
+    setFeatureDrafts([]);
+    setWorkflow("brief");
+
+    try {
+      const res = await fetch("/api/agent/design", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input,
+          userRole: userRole ?? undefined,
+        }),
+      });
+      const text = await res.text();
+      let data: unknown;
+      try {
+        data = text ? (JSON.parse(text) as unknown) : {};
+      } catch {
+        throw new Error(`설계 API 응답이 JSON이 아닙니다. (status=${res.status})`);
+      }
+
+      if (!res.ok) {
+        const message =
+          data && typeof data === "object" && "error" in data
+            ? String((data as { error?: unknown }).error ?? `요청 실패 (${res.status})`)
+            : `요청 실패 (${res.status})`;
+        throw new Error(message);
+      }
+
+      if (!isDesignPayload(data)) {
+        throw new Error("설계 결과 형식이 올바르지 않습니다.");
+      }
+
+      setDesignDoc(data);
+      setFeatureDrafts(buildEditableFeatures(data.coreFeatures));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "요청 처리 중 오류가 발생했습니다.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startAgentRun() {
+    if (!designDoc) return;
+    const selectedFeatures = pickSelectedFeatures(featureDrafts);
+    if (selectedFeatures.length === 0) return;
+
+    setWorkflow("agents");
     setPreviewUrl(null);
     setBuildError(null);
-    setBuildLogLines([]);
     setBuildPending(true);
     setLoading(true);
+    setLogMessages([]);
 
     const appendLog = (message: string) => {
       setLogMessages((prev) => [...prev, message]);
@@ -257,25 +229,30 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          input,
+          input: idea.trim() || undefined,
+          projectName: designDoc.appName,
           userRole: userRole ?? undefined,
+          designDoc,
+          selectedFeatures,
         }),
       });
 
       if (!res.ok) {
         const text = await res.text();
+        let message = `요청 실패 (${res.status})`;
         try {
           const data = JSON.parse(text) as { error?: string };
-          setError(data.error ?? `요청 실패 (${res.status})`);
+          if (typeof data.error === "string" && data.error) {
+            message = data.error;
+          }
         } catch {
-          setError(`요청 실패 (${res.status})`);
+          // keep default message
         }
-        return;
+        throw new Error(message);
       }
 
       if (!res.body) {
-        setError("스트림 응답을 받을 수 없습니다.");
-        return;
+        throw new Error("스트림 응답을 받을 수 없습니다.");
       }
 
       const reader = res.body.getReader();
@@ -290,9 +267,7 @@ export default function Home() {
         buffer = events.pop() ?? "";
 
         for (const eventChunk of events) {
-          const line = eventChunk
-            .split("\n")
-            .find((l) => l.startsWith("data: "));
+          const line = eventChunk.split("\n").find((l) => l.startsWith("data: "));
           if (!line) continue;
           const jsonText = line.slice("data: ".length).trim();
           if (!jsonText) continue;
@@ -358,32 +333,16 @@ export default function Home() {
               </CardContent>
               <CardFooter>
                 <Button asChild className="w-full" size="lg">
-                  <a
-                    href={previewUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
+                  <a href={previewUrl} target="_blank" rel="noopener noreferrer">
                     앱 열기
                   </a>
                 </Button>
               </CardFooter>
             </Card>
           )}
-          {buildError && (
-            <p className="text-sm text-destructive">{buildError}</p>
-          )}
-          {buildLogLines.length > 0 && (
-            <details className="w-full max-w-lg text-left">
-              <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
-                서버 빌드 로그 ({buildLogLines.length}줄)
-              </summary>
-              <pre className="mt-2 max-h-64 overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-xs leading-relaxed whitespace-pre-wrap">
-                {buildLogLines.join("\n")}
-              </pre>
-            </details>
-          )}
+          {buildError && <p className="text-sm text-destructive">{buildError}</p>}
           <Button type="button" size="lg" variant="secondary" onClick={backToBrief}>
-            기획서로 돌아가기
+            기능 선택 화면으로 돌아가기
           </Button>
         </div>
       </div>
@@ -444,9 +403,7 @@ export default function Home() {
   }
 
   const agentRunning = workflow === "agents";
-  const anyFeatureSelected = featureChecked.some(Boolean);
-  const logsComplete =
-    logMessages.length >= AGENT_LOG_MESSAGES.length;
+  const anyFeatureSelected = pickSelectedFeatures(featureDrafts).length > 0;
   return (
     <div className="min-h-full bg-background px-4 py-10 lg:py-12">
       <div
@@ -456,10 +413,7 @@ export default function Home() {
           className={`mx-auto w-full max-w-lg shrink-0 space-y-8 ${agentRunning ? "lg:mx-0" : ""}`}
         >
           <div className="flex items-center justify-between gap-4">
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              딱코
-            </h1>
-
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">딱코</h1>
           </div>
 
           <form onSubmit={onSubmit} className="flex flex-col gap-3">
@@ -473,75 +427,45 @@ export default function Home() {
               aria-label="프로젝트 아이디어"
               className="w-full rounded-lg border border-input bg-card px-3 py-2.5 text-base text-foreground shadow-sm outline-none ring-ring/0 transition focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             />
-            <Button
-              type="submit"
-              disabled={loading || !idea.trim() || agentRunning}
-            >
-              {loading ? "생성 중…" : "만들기"}
+            <Button type="submit" disabled={loading || !idea.trim() || agentRunning}>
+              {loading && !agentRunning ? "설계 중…" : "기능 추천 받기"}
             </Button>
           </form>
 
-          {error && (
-            <p className="text-center text-sm text-destructive lg:text-left">
-              {error}
-            </p>
-          )}
+          {error && <p className="text-center text-sm text-destructive lg:text-left">{error}</p>}
 
-          {brief && (
+          {designDoc && (
             <Card className="border-border bg-card shadow-md">
               <CardHeader className="pb-4">
                 <CardDescription>프로젝트명</CardDescription>
-                <CardTitle className="text-xl">{brief.projectName}</CardTitle>
+                <CardTitle className="text-xl">{designDoc.appName}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div>
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    예상 일정
-                  </p>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap text-card-foreground">
-                    {brief.timeline}
-                  </p>
-                </div>
-                <div>
                   <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    주요 기능
+                    추천 기능 선택/수정
                   </p>
-                  <ul className="space-y-4">
-                    {brief.features.map((f, i) => {
-                      const id = `feature-${i}`;
-                      return (
-                        <li key={id} className="flex gap-3">
-                          <Checkbox
-                            id={id}
-                            checked={featureChecked[i]}
-                            disabled={agentRunning}
-                            onCheckedChange={(v) =>
-                              setFeatureChecked((prev) =>
-                                prev.map((c, j) =>
-                                  j === i ? v === true : c
-                                )
-                              )
-                            }
-                            className="mt-0.5"
-                          />
-                          <label
-                            htmlFor={id}
-                            className={`min-w-0 flex-1 leading-snug ${agentRunning ? "cursor-default opacity-80" : "cursor-pointer"}`}
-                          >
-                            <span className="block font-medium text-card-foreground">
-                              {f.title}
-                            </span>
-                            <span className="mt-1 block text-sm text-muted-foreground">
-                              {f.description}
-                            </span>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                  <FeatureSelectionCards
+                    items={featureDrafts}
+                    disabled={agentRunning}
+                    onToggle={(id, checked) =>
+                      setFeatureDrafts((prev) =>
+                        prev.map((item) =>
+                          item.id === id ? { ...item, checked } : item
+                        )
+                      )
+                    }
+                    onTextChange={(id, text) =>
+                      setFeatureDrafts((prev) =>
+                        prev.map((item) =>
+                          item.id === id ? { ...item, text } : item
+                        )
+                      )
+                    }
+                  />
                 </div>
               </CardContent>
-              <CardFooter className="flex w-full flex-col pt-2">
+              <CardFooter className="flex w-full flex-col gap-2 pt-2">
                 <Button
                   type="button"
                   className="w-full"
@@ -549,7 +473,7 @@ export default function Home() {
                   disabled={agentRunning || !anyFeatureSelected}
                   onClick={startAgentRun}
                 >
-                  이 기능들로 개발 시작하기
+                  이 기능으로 만들기
                 </Button>
               </CardFooter>
             </Card>
@@ -562,8 +486,7 @@ export default function Home() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">에이전트 작업 로그</CardTitle>
                 <CardDescription>
-                  선택한 기능을 반영해 Claude가 코드를 만들고, GitHub에 레포를
-                  생성한 뒤 Vercel로 자동 배포합니다.
+                  선택한 기능으로 code → ui → qa → deploy 순서로 자동 진행합니다.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -576,15 +499,13 @@ export default function Home() {
                     <li
                       key={`${i}-${line.slice(0, 12)}`}
                       className="border-l-2 border-primary/40 pl-3 text-sm leading-relaxed text-card-foreground"
-                      style={{
-                        animation: "logFade 0.35s ease-out",
-                      }}
+                      style={{ animation: "logFade 0.35s ease-out" }}
                     >
                       {line}
                     </li>
                   ))}
                 </ul>
-                {buildPending && logsComplete && (
+                {buildPending && (
                   <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
                     ☁️ GitHub 레포 생성/푸시 및 Vercel 배포를 진행 중입니다. 수 분
                     걸릴 수 있습니다…
