@@ -138,7 +138,8 @@ export async function POST(req: NextRequest) {
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
 
   try {
-    const { text } = await callAnthropicMessages({
+    console.log("[design] 호출 시작, key exists:", !!process.env.ANTHROPIC_API_KEY);
+    const response = await callAnthropicMessages({
       apiKey,
       model,
       max_tokens: 2048,
@@ -150,6 +151,8 @@ export async function POST(req: NextRequest) {
         },
       ],
     });
+    console.log("[design] 응답 status:", response.status);
+    const { text } = response;
 
     if (!text) {
       return NextResponse.json(
@@ -178,6 +181,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(designDoc);
   } catch (e) {
+    console.error("[design] 에러 전체:", e);
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("(HTTP 401)")) {
       return NextResponse.json(

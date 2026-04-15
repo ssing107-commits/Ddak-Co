@@ -50,7 +50,7 @@ export async function callAnthropicMessages(params: {
   max_tokens: number;
   system: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
-}): Promise<{ raw: AnthropicMessagesResponse; text: string }> {
+}): Promise<{ status: number; raw: AnthropicMessagesResponse; text: string }> {
   const res = await fetch(ANTHROPIC_MESSAGES_URL, {
     method: "POST",
     headers: {
@@ -89,5 +89,5 @@ export async function callAnthropicMessages(params: {
 
   const raw = parsed as AnthropicMessagesResponse;
   const text = extractFirstTextBlock(raw);
-  return { raw, text };
+  return { status: res.status, raw, text };
 }

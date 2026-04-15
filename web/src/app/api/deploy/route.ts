@@ -12,6 +12,8 @@ type DeployRequest = {
   userId?: string;
   projectName?: string;
   files?: DeployFile[];
+  repoName?: string;
+  projectId?: string;
 };
 
 function slugifyRepoName(input: string): string {
@@ -92,12 +94,30 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
+  console.log("[deploy] 1. 요청 파싱 완료");
+
+  console.log("[deploy] 요청 수신:", {
+    userId: body.userId,
+    projectName: body.projectName,
+    filesCount: Array.isArray(body.files) ? body.files.length : undefined,
+    firstFilePath:
+      Array.isArray(body.files) &&
+      body.files.length > 0 &&
+      body.files[0] &&
+      typeof body.files[0] === "object" &&
+      !Array.isArray(body.files[0]) &&
+      "path" in body.files[0]
+        ? (body.files[0] as { path?: unknown }).path
+        : undefined,
+  });
 
   const userId =
     typeof body.userId === "string" && body.userId.trim()
       ? body.userId.trim()
       : "anonymous";
   const projectName = typeof body.projectName === "string" ? body.projectName.trim() : "";
+  const requestedRepoName = typeof body.repoName === "string" ? body.repoName.trim() : "";
+  const requestedProjectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
   const files = Array.isArray(body.files) ? normalizeFiles(body.files) : [];
 
   if (!projectName) {
@@ -109,22 +129,30 @@ export async function POST(req: NextRequest) {
 
   const baseName = slugifyRepoName(projectName);
   const suffix = randomSuffix();
-  const repoName = `${baseName}-${suffix}`;
-  const vercelProjectName = `${baseName}-${suffix}`;
+  const repoName = requestedRepoName || `${baseName}-${suffix}`;
+  const vercelProjectName = requestedRepoName || `${baseName}-${suffix}`;
 
-  try {
-    await createRepo(repoName);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { error: `GitHub 레포 생성 실패: ${msg}` },
-      { status: 502 }
-    );
+  if (!requestedRepoName) {
+    console.log("[deploy] 2. GitHub repo 생성 시작");
+    try {
+      await createRepo(repoName);
+      console.log("[deploy] 3. GitHub repo 생성 완료");
+    } catch (e) {
+      console.error("[deploy] createRepo 에러 전체:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json(
+        { error: `GitHub 레포 생성 실패: ${msg}` },
+        { status: 502 }
+      );
+    }
   }
 
+  console.log("[deploy] 4. 코드 푸시 시작");
   try {
     await pushCode(repoName, files);
+    console.log("[deploy] 5. 코드 푸시 완료");
   } catch (e) {
+    console.error("[deploy] pushCode 에러 전체:", e);
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(
       { error: `GitHub 코드 푸시 실패: ${msg}` },
@@ -132,34 +160,44 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let projectId: string;
-  try {
-    const created = await createProject(vercelProjectName, repoName);
-    projectId = created.projectId;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { error: `Vercel 프로젝트 생성 실패: ${msg}` },
-      { status: 502 }
-    );
+  let projectId = requestedProjectId;
+  if (!projectId) {
+    console.log("[deploy] 6. Vercel 프로젝트 생성 시작");
+    try {
+      const created = await createProject(vercelProjectName, repoName);
+      projectId = created.projectId;
+      console.log("[deploy] 7. Vercel 프로젝트 생성 완료");
+    } catch (e) {
+      console.error("[deploy] createProject 에러 전체:", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json(
+        { error: `Vercel 프로젝트 생성 실패: ${msg}` },
+        { status: 502 }
+      );
+    }
   }
 
+  console.log("[deploy] 8. Vercel 배포 시작");
   let deployUrl: string;
   try {
     const deployed = await deployAndGetUrl(projectId);
     deployUrl = deployed.deployUrl;
+    console.log("[deploy] 9. Vercel 배포 완료");
   } catch (e) {
+    console.error("[deploy] deployAndGetUrl 에러 전체:", e);
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: `Vercel 배포 실패: ${msg}` }, { status: 502 });
   }
 
+  console.log("[deploy] 10. Supabase 저장 시도");
   try {
     await insertDeploymentRow({ userId, projectName, deployUrl });
+    console.log("[deploy] 11. Supabase 저장 완료");
   } catch (e) {
     console.error("[deploy] Supabase 저장 실패 (무시):", e);
     // 저장 실패해도 배포 성공으로 처리
   }
 
-  return NextResponse.json({ deployUrl });
+  return NextResponse.json({ deployUrl, repoName, projectId });
 }
 

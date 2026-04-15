@@ -4,7 +4,7 @@ import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropi
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 180;
+export const maxDuration = 120;
 
 const SYSTEM_PROMPT = `당신은 코드 품질 검수 전문가입니다.
 Vercel 빌드가 반드시 통과되어야 합니다.

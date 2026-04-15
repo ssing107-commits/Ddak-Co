@@ -5,18 +5,24 @@ import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropi
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 180;
+export const maxDuration = 120;
 
 const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 입력으로 받은 앱 설계서를 바탕으로 Next.js 14 App Router 프로젝트 코드를 완성하세요.
 
-반드시 아래 형태의 JSON 한 덩어리만 출력하세요. 마크다운 코드블록·설명 문장 없이 순수 JSON만 출력하세요.
-{"files":[{"path":"파일경로","content":"BASE64_UTF8"},...]}
+반드시 아래 JSON 형식으로만 응답하세요.
+마크다운 코드블록 없이 순수 JSON만 반환하세요.
+content 값은 이스케이프된 문자열로 작성하세요.
+절대로 base64 인코딩하지 마세요.
 
-중요 — content 필드:
-- 각 파일의 실제 소스는 UTF-8 바이트 시퀀스로 만든 뒤, 그 바이트를 base64로 인코딩한 **한 줄짜리 문자열**만 넣으세요.
-- content에 소스 코드를 그대로(따옴표·백슬래시·줄바꿈 포함) 넣지 마세요. JSON 이스케이프 실패를 막기 위함입니다.
-- base64 문자열에는 공백/줄바꿈을 넣지 마세요.
+{
+  "files": [
+    {
+      "path": "파일경로",
+      "content": "파일내용 (줄바꿈은 \\n, 따옴표는 \\\", 백슬래시는 \\\\로 이스케이프)"
+    }
+  ]
+}
 
 규칙:
 - Next.js 14 App Router 구조를 사용
@@ -31,12 +37,22 @@ type CodeRequest = {
   design?: unknown;
   designDoc?: unknown;
   input?: unknown;
+  draft?: boolean;
 };
 
 type GeneratedFile = {
   path: string;
   content: string;
 };
+
+function decodeHtmlEntities(content: string): string {
+  return content
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
 
 /** 응답 맨 앞에 붙는 ```json / ``` 마크다운 펜스를 반복 제거 */
 function preprocessStripMarkdownJsonFence(text: string): string {
@@ -141,35 +157,6 @@ function extractDesignInput(body: CodeRequest): unknown {
   return body.input;
 }
 
-/** 프롬프트 기준(base64)과 구 모델(평문) 호환: 거의 base64 알파벳이면 디코딩 */
-function likelyBase64Payload(s: string): boolean {
-  const t = s.replace(/\s/g, "");
-  if (t.length < 4 || t.length % 4 === 1) return false;
-  let ok = 0;
-  for (let i = 0; i < t.length; i++) {
-    const c = t.charCodeAt(i);
-    if (
-      (c >= 48 && c <= 57) ||
-      (c >= 65 && c <= 90) ||
-      (c >= 97 && c <= 122) ||
-      c === 43 ||
-      c === 47 ||
-      c === 61
-    ) {
-      ok++;
-    }
-  }
-  return ok / t.length > 0.97;
-}
-
-function decodeFileContentField(raw: string): string {
-  if (!likelyBase64Payload(raw)) {
-    return raw;
-  }
-  const compact = raw.replace(/\s/g, "");
-  return Buffer.from(compact, "base64").toString("utf-8");
-}
-
 function normalizeFiles(raw: unknown): GeneratedFile[] {
   const list = Array.isArray(raw) ? raw : [];
   return list
@@ -180,7 +167,7 @@ function normalizeFiles(raw: unknown): GeneratedFile[] {
       const rawContent = typeof rec.content === "string" ? rec.content : "";
       return {
         path,
-        content: decodeFileContentField(rawContent),
+        content: decodeHtmlEntities(rawContent),
       };
     })
     .filter((f) => f.path && f.content);
@@ -232,6 +219,7 @@ export async function POST(req: NextRequest) {
   }
 
   const design = extractDesignInput(body);
+  const draftMode = body.draft === true;
   if (!design || typeof design !== "object" || Array.isArray(design)) {
     return NextResponse.json(
       { error: "설계 JSON(design/designDoc/input object)이 필요합니다." },
@@ -245,26 +233,29 @@ export async function POST(req: NextRequest) {
     const { text } = await callAnthropicMessages({
       apiKey,
       model,
-      max_tokens: 16384,
+      max_tokens: draftMode ? 8192 : 16384,
       system: SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
           content: `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.
-각 files[].content는 해당 파일 UTF-8 본문의 base64(공백 없이)만 넣으세요. 마크다운으로 감싸지 마세요.
+반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.
+${draftMode ? "이번 요청은 빠른 초안 배포용입니다. 동작하는 틀만 작성하고 총 파일 수를 8개 이하로 제한하세요. 주석은 쓰지 말고 최대한 간결하게 작성하세요." : ""}
 
 ${JSON.stringify(design, null, 2)}`,
         },
       ],
     });
 
-    if (!text) {
+    const rawText = text;
+    console.log("[code] raw response (앞 2000자):", rawText.slice(0, 2000));
+    if (!rawText) {
       return NextResponse.json({ error: "코드 생성 응답을 처리할 수 없습니다." }, { status: 502 });
     }
 
     let parsed: unknown;
     try {
-      parsed = parseClaudeJsonWithRecovery(text);
+      parsed = parseClaudeJsonWithRecovery(rawText);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[api/agent/code] JSON parse failure:", msg);
