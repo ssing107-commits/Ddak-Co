@@ -35,10 +35,19 @@ type QaRequest = {
   uiFiles?: unknown;
 };
 
-function stripJsonFence(text: string): string {
-  let s = text.trim();
-  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  return s.trim();
+const QA_PARSE_FALLBACK = {
+  passed: false,
+  issues: ["QA 응답 파싱 실패"],
+  suggestions: [],
+} as const;
+
+function sanitizeClaudeResponse(text: string): string {
+  return text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+}
+
+function extractJsonObjectText(text: string): string {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  return jsonMatch ? jsonMatch[0] : text;
 }
 
 function normalizeFiles(raw: unknown): FileItem[] {
@@ -156,11 +165,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "QA 응답을 처리할 수 없습니다." }, { status: 502 });
     }
 
+    const sanitized = sanitizeClaudeResponse(text);
+    const jsonStr = extractJsonObjectText(sanitized);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(stripJsonFence(text));
+      parsed = JSON.parse(jsonStr);
     } catch {
-      return NextResponse.json({ error: "QA 응답 JSON 파싱에 실패했습니다." }, { status: 502 });
+      return NextResponse.json(QA_PARSE_FALLBACK);
     }
 
     const finalFiles = normalizeFiles((parsed as { files?: unknown }).files);
