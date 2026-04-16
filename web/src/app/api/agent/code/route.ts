@@ -34,7 +34,18 @@ content 값은 이스케이프된 문자열로 작성하세요.
 - 최소 포함 파일: app/layout.tsx, app/page.tsx
 - 반드시 package.json을 포함하고, dependencies에 next, react, react-dom을 넣을 것
 - package.json 작성 시 반드시 아래 규칙을 따를 것:
-  - @radix-ui/* 패키지는 반드시 ^1.x 버전대를 사용할 것 (^2.x 존재하지 않음)
+  - lucide-react를 import해서 사용하는 컴포넌트를 생성할 경우, dependencies에 "lucide-react": "^0.447.0"을 반드시 포함할 것
+  - shadcn/ui 기반 Next.js 앱을 생성할 때는 아래 패키지를 package.json dependencies에 기본 포함할 것:
+    - next: 14.2.3
+    - react: ^18
+    - react-dom: ^18
+    - lucide-react: ^0.447.0
+    - tailwindcss: ^3.4.0
+    - class-variance-authority: ^0.7.0
+    - clsx: ^2.1.0
+    - tailwind-merge: ^2.3.0
+    - @radix-ui/react-slot: ^1.1.0
+  - @radix-ui/* 패키지는 ^1.x 버전대를 기본으로 사용할 것
   - shadcn/ui 관련 패키지는 아래 검증된 버전만 사용:
     - @radix-ui/react-slot: ^1.1.0
     - @radix-ui/react-dialog: ^1.1.0
