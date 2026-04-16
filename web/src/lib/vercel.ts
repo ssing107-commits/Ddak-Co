@@ -30,6 +30,100 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const BUILD_LOG_FETCH_MAX_EVENTS = 4000;
+const BUILD_LOG_ERROR_APPEND_MAX_CHARS = 14_000;
+const BUILD_LOG_RAW_MAX_CHARS = 350_000;
+
+type DeploymentEventRow = {
+  type?: string;
+  text?: string;
+  payload?: { text?: string };
+  created?: number;
+};
+
+function parseDeploymentEventsPayload(data: unknown): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === "object" && Array.isArray((data as { events?: unknown[] }).events)) {
+    return (data as { events: unknown[] }).events;
+  }
+  return [];
+}
+
+function deploymentEventToLine(ev: unknown): string | null {
+  if (!ev || typeof ev !== "object") return null;
+  const o = ev as DeploymentEventRow & { payload?: { text?: string } };
+  const type = typeof o.type === "string" ? o.type : "?";
+  const payload = o.payload && typeof o.payload === "object" ? o.payload : null;
+  const text =
+    (typeof o.text === "string" ? o.text : null) ??
+    (payload && typeof payload.text === "string" ? payload.text : null);
+  if (text && text.trim()) {
+    return type === "stdout" || type === "stderr" ? text : `[${type}] ${text}`;
+  }
+  if (type === "fatal" || type === "exit" || type === "command") {
+    try {
+      return `[${type}] ${JSON.stringify(o).slice(0, 800)}`;
+    } catch {
+      return `[${type}]`;
+    }
+  }
+  return null;
+}
+
+function formatDeploymentBuildLog(events: unknown[]): string {
+  const lines: string[] = [];
+  for (const ev of events) {
+    const line = deploymentEventToLine(ev);
+    if (line) lines.push(line);
+  }
+  return lines.join("\n").trim();
+}
+
+/** Vercel 빌드 로그(배포 이벤트 스트림). 실패 원인 파악용. */
+export async function fetchDeploymentBuildLogs(
+  deploymentId: string,
+  options?: { maxChars?: number }
+): Promise<string> {
+  const teamId = getRequiredEnv("VERCEL_TEAM_ID");
+  const id = deploymentId.trim();
+  if (!id) {
+    throw new Error("[vercel] deploymentId is required for build logs");
+  }
+
+  const qs = new URLSearchParams({
+    teamId,
+    limit: String(BUILD_LOG_FETCH_MAX_EVENTS),
+    direction: "backward",
+  });
+  const data = await vercelRequest<unknown>(
+    `/v3/deployments/${encodeURIComponent(id)}/events?${qs.toString()}`,
+    {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    }
+  );
+
+  const raw = parseDeploymentEventsPayload(data);
+  const chronological = [...raw].reverse();
+  let text = formatDeploymentBuildLog(chronological);
+  if (text.length > BUILD_LOG_RAW_MAX_CHARS) {
+    text =
+      `…(중간 생략, 총 ${text.length}자 중 마지막 ${BUILD_LOG_RAW_MAX_CHARS}자)\n` +
+      text.slice(-BUILD_LOG_RAW_MAX_CHARS);
+  }
+
+  const maxChars = options?.maxChars;
+  if (typeof maxChars === "number" && maxChars > 0 && text.length > maxChars) {
+    text = `…(앞부분 생략, 마지막 ${maxChars}자)\n` + text.slice(-maxChars);
+  }
+  return text || "(빌드 로그 본문이 비어 있음 — 이벤트 API 응답에 텍스트가 없습니다.)";
+}
+
+function truncateForErrorMessage(log: string, max = BUILD_LOG_ERROR_APPEND_MAX_CHARS): string {
+  if (log.length <= max) return log;
+  return `…(총 ${log.length}자 중 마지막 ${max}자)\n` + log.slice(-max);
+}
+
 async function vercelRequest<T>(path: string, init: RequestInit): Promise<T> {
   const token = getRequiredEnv("VERCEL_TOKEN");
   const res = await fetch(`https://api.vercel.com${path}`, {
@@ -172,8 +266,22 @@ export async function deployAndGetUrl(
       return { deployUrl: normalizeDeployUrl(finalUrl) };
     }
     if (status.readyState === "ERROR" || status.readyState === "CANCELED") {
+      const summary = status.errorMessage || status.readyState;
+      let buildLog = "";
+      try {
+        buildLog = await fetchDeploymentBuildLogs(deployment.id);
+      } catch (logErr) {
+        const logMsg = logErr instanceof Error ? logErr.message : String(logErr);
+        buildLog = `(빌드 로그 조회 실패: ${logMsg})`;
+      }
+      console.error(
+        "[vercel] Deployment build logs (deploymentId=%s):\n%s",
+        deployment.id,
+        buildLog
+      );
+      const logForError = truncateForErrorMessage(buildLog);
       throw new Error(
-        `[vercel] Deployment failed: ${status.errorMessage || status.readyState}`
+        `[vercel] Deployment failed: ${summary}\n\n--- Vercel build log ---\n${logForError}`
       );
     }
 
