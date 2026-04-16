@@ -26,6 +26,51 @@ function normalizeDeployUrl(url: string): string {
   return url.startsWith("http://") || url.startsWith("https://") ? url : `https://${url}`;
 }
 
+function toHostname(input: string): string | null {
+  const value = input.trim();
+  if (!value) return null;
+  try {
+    return new URL(normalizeDeployUrl(value)).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function toVercelAppUrl(input: string): string | null {
+  const host = toHostname(input);
+  if (!host || !host.endsWith(".vercel.app")) return null;
+  return `https://${host}`;
+}
+
+function selectShortestVercelAlias(aliases: unknown): string | null {
+  if (!Array.isArray(aliases)) return null;
+  const candidates = aliases
+    .filter((v): v is string => typeof v === "string")
+    .map((v) => toVercelAppUrl(v))
+    .filter((v): v is string => Boolean(v));
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.length - b.length || a.localeCompare(b));
+  return candidates[0];
+}
+
+function deriveProductionUrlFromPreviewUrl(previewUrl: string, projectName: string): string | null {
+  const host = toHostname(previewUrl);
+  if (!host || !host.endsWith(".vercel.app")) return null;
+  const root = host.slice(0, -".vercel.app".length);
+  const normalizedProjectName = projectName.trim().toLowerCase();
+  if (normalizedProjectName && root.startsWith(`${normalizedProjectName}-`)) {
+    return `https://${normalizedProjectName}.vercel.app`;
+  }
+
+  // preview host 형태: <project>-<hash>-<scope>.vercel.app 에서 hash/scope 구간 제거
+  const stripped = root.replace(/-[a-z0-9]{8,}-.*$/i, "");
+  if (stripped && stripped !== root) {
+    return `https://${stripped}.vercel.app`;
+  }
+  return null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -252,6 +297,7 @@ export async function deployAndGetUrl(
       readyState?: string;
       url?: string;
       inspectorUrl?: string;
+      alias?: string[];
       errorMessage?: string;
     }>(
       `/v13/deployments/${encodeURIComponent(deployment.id)}?teamId=${encodeURIComponent(teamId)}`,
@@ -259,11 +305,16 @@ export async function deployAndGetUrl(
     );
 
     if (status.readyState === "READY") {
-      const finalUrl = status.url || status.inspectorUrl;
+      const previewUrl = status.url || status.inspectorUrl;
+      const aliasUrl = selectShortestVercelAlias(status.alias);
+      const derivedProductionUrl = previewUrl
+        ? deriveProductionUrlFromPreviewUrl(previewUrl, project.name)
+        : null;
+      const finalUrl = aliasUrl || derivedProductionUrl || (previewUrl ? normalizeDeployUrl(previewUrl) : null);
       if (!finalUrl) {
         throw new Error("[vercel] Deployment completed but URL was not returned");
       }
-      return { deployUrl: normalizeDeployUrl(finalUrl) };
+      return { deployUrl: finalUrl };
     }
     if (status.readyState === "ERROR" || status.readyState === "CANCELED") {
       const summary = status.errorMessage || status.readyState;
