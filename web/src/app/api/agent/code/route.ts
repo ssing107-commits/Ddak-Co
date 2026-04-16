@@ -32,7 +32,18 @@ content 값은 이스케이프된 문자열로 작성하세요.
 - 모바일 우선 반응형
 - path는 프로젝트 루트 기준 상대 경로
 - 최소 포함 파일: app/layout.tsx, app/page.tsx
-- 반드시 package.json을 포함하고, dependencies에 next, react, react-dom을 넣을 것`;
+- 반드시 package.json을 포함하고, dependencies에 next, react, react-dom을 넣을 것
+- package.json 작성 시 반드시 아래 규칙을 따를 것:
+  - @radix-ui/* 패키지는 반드시 ^1.x 버전대를 사용할 것 (^2.x 존재하지 않음)
+  - shadcn/ui 관련 패키지는 아래 검증된 버전만 사용:
+    - @radix-ui/react-slot: ^1.1.0
+    - @radix-ui/react-dialog: ^1.1.0
+    - @radix-ui/react-dropdown-menu: ^2.1.0
+    - class-variance-authority: ^0.7.0
+    - clsx: ^2.1.0
+    - tailwind-merge: ^2.3.0
+  - npm registry에 실제 존재하는 버전만 사용할 것
+  - 확실하지 않은 패키지 버전은 ^latest 대신 안정적인 ^1.x 또는 ^2.x 중 npm에서 확인된 버전 사용`;
 
 type CodeRequest = {
   design?: unknown;
