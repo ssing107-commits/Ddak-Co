@@ -5,8 +5,8 @@ import {
   type PathContentFile,
 } from "@/lib/agent-path-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
-import { stripUnusedReactStateSetters } from "@/lib/strip-unused-react-state-setters";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,13 +89,6 @@ function mergeUpdatedFiles(
   return Array.from(merged.values());
 }
 
-function postProcessFiles(files: PathContentFile[]): PathContentFile[] {
-  return files.map((file) => {
-    if (!/\.(ts|tsx)$/.test(file.path)) return file;
-    return { ...file, content: stripUnusedReactStateSetters(file.content) };
-  });
-}
-
 export async function POST(req: NextRequest) {
   const apiKey = getAnthropicApiKeyFromEnv();
   if (!apiKey) {
@@ -123,7 +116,7 @@ export async function POST(req: NextRequest) {
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
   const promptPayload = buildUiPromptPayload(files);
   if (promptPayload.uiFiles.length === 0) {
-    return NextResponse.json({ files: postProcessFiles(files) });
+    return NextResponse.json({ files: postProcessAgentFiles(files) });
   }
 
   try {
@@ -160,7 +153,7 @@ export async function POST(req: NextRequest) {
       (parsed as { files?: unknown })?.files
     );
     const mergedFiles = improvedFiles.length > 0 ? mergeUpdatedFiles(files, improvedFiles) : files;
-    return NextResponse.json({ files: postProcessFiles(mergedFiles) });
+    return NextResponse.json({ files: postProcessAgentFiles(mergedFiles) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("(HTTP 401)")) {

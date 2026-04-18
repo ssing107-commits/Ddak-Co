@@ -9,7 +9,7 @@ import {
   peelOuterMarkdownJsonFences,
   sliceGreedyJsonObject,
 } from "@/lib/anthropic-json-text";
-import { stripUnusedReactStateSetters } from "@/lib/strip-unused-react-state-setters";
+import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,25 +60,6 @@ function extractInputFiles(body: QaRequest): PathContentFile[] {
   }
 
   return [];
-}
-
-function removeIgnoreBuildOptions(content: string): string {
-  return content
-    .replace(/\n\s*typescript:\s*\{\s*ignoreBuildErrors:\s*true\s*\},?/g, "")
-    .replace(/\n\s*eslint:\s*\{\s*ignoreDuringBuilds:\s*true\s*\},?/g, "");
-}
-
-function postProcessFiles(files: PathContentFile[]): PathContentFile[] {
-  return files.map((file) => {
-    let content = file.content;
-    if (/\.(ts|tsx)$/.test(file.path)) {
-      content = stripUnusedReactStateSetters(content);
-    }
-    if (file.path === "next.config.mjs") {
-      content = removeIgnoreBuildOptions(content);
-    }
-    return { ...file, content };
-  });
 }
 
 export async function POST(req: NextRequest) {
@@ -143,7 +124,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "검증 완료 파일 목록이 비어 있습니다." }, { status: 502 });
     }
 
-    return NextResponse.json({ files: postProcessFiles(finalFiles) });
+    return NextResponse.json({ files: postProcessAgentFiles(finalFiles) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("(HTTP 401)")) {

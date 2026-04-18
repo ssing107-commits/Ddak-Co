@@ -1,8 +1,8 @@
 import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 
+import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
-import { stripUnusedReactStateSetters } from "@/lib/strip-unused-react-state-setters";
 import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
@@ -188,16 +188,6 @@ function normalizeFiles(raw: unknown): GeneratedFile[] {
     .filter((f) => f.path && f.content);
 }
 
-function postProcessFiles(files: GeneratedFile[]): GeneratedFile[] {
-  return files.map((file) => {
-    if (!/\.(ts|tsx)$/.test(file.path)) return file;
-    return {
-      ...file,
-      content: stripUnusedReactStateSetters(file.content),
-    };
-  });
-}
-
 export async function POST(req: NextRequest) {
   const apiKey = getAnthropicApiKeyFromEnv();
   if (!apiKey) {
@@ -279,7 +269,7 @@ ${JSON.stringify(design, null, 2)}`,
       );
     }
 
-    return NextResponse.json({ files: postProcessFiles(files) });
+    return NextResponse.json({ files: postProcessAgentFiles(files) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("(HTTP 401)")) {
