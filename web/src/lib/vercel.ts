@@ -97,6 +97,34 @@ const BUILD_LOG_FETCH_MAX_EVENTS = 4000;
 const BUILD_LOG_ERROR_APPEND_MAX_CHARS = 14_000;
 const BUILD_LOG_RAW_MAX_CHARS = 350_000;
 
+const BUILD_LOG_EVENTS_EMPTY_PLACEHOLDER =
+  "(빌드 로그 본문이 비어 있음 — 이벤트 API 응답에 텍스트가 없습니다.)";
+
+/** 이벤트 API가 아직 stderr를 안 쌓았을 때(짧은 프리앰블만 있음) 재조회할지 */
+const BUILD_LOG_FAILURE_HINT_RE =
+  /error|failed|errno|npm err|command failed|exit code|exited with\s+\d+|elifecycle|cannot find|module not found|unexpected token|syntaxerror|ts\d{4,}|✖|⨯/i;
+
+export function shouldRetryBuildLogFetch(log: string): boolean {
+  const t = log.trim();
+  if (!t || t === BUILD_LOG_EVENTS_EMPTY_PLACEHOLDER) return true;
+  if (BUILD_LOG_FAILURE_HINT_RE.test(t)) return false;
+  if (t.length >= 700) return false;
+  return true;
+}
+
+const BUILD_LOG_REFETCH_DELAYS_MS = [2500, 4000] as const;
+
+async function fetchDeploymentBuildLogsWithRetry(deploymentId: string): Promise<string> {
+  let log = await fetchDeploymentBuildLogs(deploymentId);
+  if (!shouldRetryBuildLogFetch(log)) return log;
+  for (const delayMs of BUILD_LOG_REFETCH_DELAYS_MS) {
+    await sleep(delayMs);
+    log = await fetchDeploymentBuildLogs(deploymentId);
+    if (!shouldRetryBuildLogFetch(log)) return log;
+  }
+  return log;
+}
+
 type DeploymentEventRow = {
   type?: string;
   text?: string;
@@ -179,7 +207,7 @@ export async function fetchDeploymentBuildLogs(
   if (typeof maxChars === "number" && maxChars > 0 && text.length > maxChars) {
     text = `…(앞부분 생략, 마지막 ${maxChars}자)\n` + text.slice(-maxChars);
   }
-  return text || "(빌드 로그 본문이 비어 있음 — 이벤트 API 응답에 텍스트가 없습니다.)";
+  return text || BUILD_LOG_EVENTS_EMPTY_PLACEHOLDER;
 }
 
 function truncateForErrorMessage(log: string, max = BUILD_LOG_ERROR_APPEND_MAX_CHARS): string {
@@ -338,7 +366,7 @@ export async function deployAndGetUrl(
       const summary = status.errorMessage || status.readyState;
       let buildLog = "";
       try {
-        buildLog = await fetchDeploymentBuildLogs(deployment.id);
+        buildLog = await fetchDeploymentBuildLogsWithRetry(deployment.id);
       } catch (logErr) {
         const logMsg = logErr instanceof Error ? logErr.message : String(logErr);
         buildLog = `(빌드 로그 조회 실패: ${logMsg})`;
