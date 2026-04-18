@@ -18,7 +18,8 @@
 cd web
 npm install
 cp .env.example .env.local
-# .env.local에 ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_ORG, VERCEL_TOKEN, VERCEL_TEAM_ID를 채운 뒤
+# .env.local에 필수: ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_ORG, VERCEL_TOKEN, VERCEL_TEAM_ID
+# 선택: ANTHROPIC_MODEL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY(배포 기록용)
 npm run dev
 ```
 
@@ -34,8 +35,10 @@ npm run dev
 | `GITHUB_ORG` | 예 | 딱코 GitHub 조직 이름 |
 | `VERCEL_TOKEN` | 예 | Vercel REST API 토큰 (`/api/deploy`) |
 | `VERCEL_TEAM_ID` | 예 | 딱코 Vercel Team ID |
-| `SUPABASE_URL` | 아니오 | 배포 기록 저장 시 (`/api/deploy` — 없으면 기록만 생략) |
-| `SUPABASE_SERVICE_ROLE_KEY` | 아니오 | 위와 함께 사용 |
+| `SUPABASE_URL` | 아니오 | 배포 기록 저장 시 (`/api/deploy` — 없으면 해당 단계만 생략, 배포는 성공 처리) |
+| `SUPABASE_SERVICE_ROLE_KEY` | 아니오 | Supabase **service_role** 키. `SUPABASE_URL`과 함께 설정 |
+
+**Supabase 배포 기록:** 둘 다 설정하면 `/api/deploy`가 성공 후 `POST {SUPABASE_URL}/rest/v1/deployments` 로 한 줄을 넣습니다. 테이블 예시 컬럼: `userId`, `projectName`, `deployUrl`, `createdAt`(코드와 스키마가 맞아야 함). 미설정이면 로그에만 실패가 남고 사용자에게는 배포 URL이 그대로 반환됩니다.
 
 `.env.local`은 Git에 올리지 마세요. 팀·배포 환경에는 Vercel 대시보드 등에서 동일한 키 이름으로 설정합니다.
 
@@ -44,8 +47,8 @@ npm run dev
 1. [Vercel](https://vercel.com)에 로그인하고 **Add New… → Project**로 Git 저장소를 연결합니다.
 2. 저장소 루트가 `web`이 아니라 상위 폴더(예: `Ddak-Co`)인 경우, 프로젝트 설정의 **Root Directory**를 `web`으로 지정합니다.
 3. **Environment Variables**에 `.env.example`에 적힌 이름 그대로 변수를 추가합니다.  
-   - `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`를 설정합니다.  
-   - `ANTHROPIC_MODEL`, `SUPABASE_*`는 선택입니다.
+   - 필수: `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`  
+   - 선택: `ANTHROPIC_MODEL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 4. `/api/deploy` 등 일부 API는 **수 분**까지 실행될 수 있습니다. Vercel **Pro** 등에서 라우트 `maxDuration`과 플랜 한도를 확인하세요(Hobby는 더 짧을 수 있습니다).
 5. **Deploy**를 누르면 `npm install` → `npm run build`가 실행되고 배포가 완료됩니다.
 
