@@ -195,6 +195,8 @@ export async function POST(req: NextRequest) {
         {
           error: `Vercel 배포 실패: ${summary}`,
           deploymentId,
+          repoName,
+          projectId,
           ...(inspectorUrl ? { inspectorUrl } : {}),
           buildLogTail,
         },

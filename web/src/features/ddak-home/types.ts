@@ -24,6 +24,9 @@ export type DeployPayload = {
 export type DeployFailurePayload = {
   error: string;
   deploymentId: string;
+  /** 자동 수정 후 재배포에 필요 */
+  repoName: string;
+  projectId: string;
   inspectorUrl?: string;
   buildLogTail: string;
 };

@@ -42,6 +42,84 @@ function appendDeployStructuredFailure(
   }
 }
 
+/** Vercel 배포 실패 시 fix-build 1회 후 같은 레포로 재배포(최대 1라운드) */
+async function deployWithOneFixRound(params: {
+  userId: string;
+  projectName: string;
+  files: FileItem[];
+  repoName?: string;
+  projectId?: string;
+  appendLog: (message: string) => void;
+}): Promise<{ deploy: DeployPayload; files: FileItem[] }> {
+  const deployOnce = (
+    files: FileItem[],
+    repoOverride?: string,
+    projectOverride?: string
+  ) => {
+    const repo = repoOverride ?? params.repoName;
+    const project = projectOverride ?? params.projectId;
+    return postJson<DeployPayload>("/api/deploy", {
+      userId: params.userId,
+      projectName: params.projectName,
+      files,
+      ...(repo ? { repoName: repo } : {}),
+      ...(project ? { projectId: project } : {}),
+    });
+  };
+
+  let files = params.files;
+  try {
+    const deploy = await deployOnce(files);
+    return { deploy, files };
+  } catch (firstErr) {
+    appendDeployStructuredFailure(params.appendLog, firstErr);
+    if (!(firstErr instanceof ApiError) || firstErr.status !== 502) {
+      throw firstErr;
+    }
+    const o = firstErr.body;
+    if (!o || typeof o !== "object") throw firstErr;
+    const rec = o as Record<string, unknown>;
+    const buildLogTail =
+      typeof rec.buildLogTail === "string" ? rec.buildLogTail.trim() : "";
+    if (!buildLogTail) throw firstErr;
+
+    const repoFromError =
+      typeof rec.repoName === "string" ? rec.repoName.trim() : "";
+    const projectFromError =
+      typeof rec.projectId === "string" ? rec.projectId.trim() : "";
+    const repoForRetry = repoFromError || params.repoName?.trim() || "";
+    const projectForRetry = projectFromError || params.projectId?.trim() || "";
+    if (!repoForRetry || !projectForRetry) {
+      params.appendLog(
+        "자동 수정·재배포: repo/project 정보가 없어 건너뜁니다."
+      );
+      throw firstErr;
+    }
+
+    params.appendLog("배포 실패 — 빌드 로그 기준 fix-build 1회 실행 중...");
+    try {
+      const fixed = await postJson<{ files: FileItem[] }>("/api/agent/fix-build", {
+        files,
+        buildLogTail,
+        ...(typeof rec.error === "string" ? { deploySummary: rec.error } : {}),
+      });
+      if (!Array.isArray(fixed.files) || fixed.files.length === 0) {
+        throw firstErr;
+      }
+      files = fixed.files;
+    } catch (fixErr) {
+      params.appendLog(
+        `fix-build 실패: ${errorMessage(fixErr, "알 수 없는 오류")}`
+      );
+      throw firstErr;
+    }
+
+    params.appendLog("fix-build 완료 — 재배포 중...");
+    const deploy = await deployOnce(files, repoForRetry, projectForRetry);
+    return { deploy, files };
+  }
+}
+
 /** 1단계: 아이디어 → design API → 기획서·기능 초안 */
 export async function runPlanningSubmit(
   e: FormEvent,
@@ -141,11 +219,13 @@ export async function runDraftDeployment(ctx: {
     }
 
     ctx.appendLog("2단계 진행: GitHub 업로드 + Vercel 초안 배포 중...");
-    const deployResult = await postJson<DeployPayload>("/api/deploy", {
-      userId: ctx.userRole ?? "anonymous",
-      projectName: ctx.designDoc.appName,
-      files: codeResult.files,
-    });
+    const { deploy: deployResult, files: deployedFiles } =
+      await deployWithOneFixRound({
+        userId: ctx.userRole ?? "anonymous",
+        projectName: ctx.designDoc.appName,
+        files: codeResult.files,
+        appendLog: ctx.appendLog,
+      });
 
     if (!deployResult.deployUrl) {
       throw new Error("초안 배포 URL을 받지 못했습니다.");
@@ -154,7 +234,7 @@ export async function runDraftDeployment(ctx: {
       throw new Error("재배포에 필요한 repo/project 정보가 없습니다.");
     }
 
-    ctx.setDraftFiles(codeResult.files);
+    ctx.setDraftFiles(deployedFiles);
     ctx.setDraftDeployUrl(deployResult.deployUrl);
     ctx.setDeployContext({
       repoName: deployResult.repoName,
@@ -212,12 +292,13 @@ export async function runFinalizeDeployment(ctx: {
     }
 
     ctx.appendLog("3단계 진행: 동일 레포 업데이트 및 재배포 중...");
-    const redeployResult = await postJson<DeployPayload>("/api/deploy", {
+    const { deploy: redeployResult } = await deployWithOneFixRound({
       userId: ctx.userRole ?? "anonymous",
       projectName: ctx.designDoc.appName,
       files: qaResult.files,
       repoName: ctx.deployContext.repoName,
       projectId: ctx.deployContext.projectId,
+      appendLog: ctx.appendLog,
     });
     if (!redeployResult.deployUrl) {
       throw new Error("최종 배포 URL을 받지 못했습니다.");
