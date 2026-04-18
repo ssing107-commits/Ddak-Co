@@ -219,14 +219,17 @@ export async function POST(req: NextRequest) {
     const { text } = await callAnthropicMessages({
       apiKey,
       model,
-      max_tokens: draftMode ? 8192 : 16384,
+      max_tokens: draftMode ? 12_288 : 16384,
       system: SYSTEM_PROMPT,
       messages: [
         {
           role: "user",
           content: `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.
 반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.
-${draftMode ? "이번 요청은 빠른 초안 배포용입니다. 동작하는 틀만 작성하고 총 파일 수를 8개 이하로 제한하세요. 주석은 쓰지 말고 최대한 간결하게 작성하세요." : ""}
+${draftMode ? `이번 요청은 빠른 초안 배포용이지만, **허전한 뼈대만 두지 마세요.**
+- 설계서의 coreFeatures(선택된 기능)마다 **화면에서 바로 체감되는 동작**을 최소 1개씩 넣으세요(예: 버튼 클릭 시 상태 변화, 입력·목록·토글, 간단한 폼 제출 후 토스트/안내). 데모용 더미 데이터·로컬 state로 충분합니다.
+- **app/page.tsx**는 랜딩 겸 기능 미리보기 섹션을 갖추고, 필요하면 기능별로 app/ 하위 라우트를 나눠도 됩니다.
+- 총 파일 수는 **12개 이하**, 주석은 최소화, 코드는 읽기 쉽게 유지하세요.` : ""}
 
 ${JSON.stringify(design, null, 2)}`,
         },
