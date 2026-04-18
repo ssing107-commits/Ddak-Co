@@ -25,6 +25,15 @@ npm run dev
 
 브라우저에서 [http://localhost:3000](http://localhost:3000) 을 엽니다.
 
+## 테스트
+
+```bash
+cd web
+npm run test
+```
+
+`src/lib/*.test.ts` — 공통 유틸(Anthropic JSON 펜스 제거, `files` 정규화 등) 단위 테스트.
+
 ## 환경 변수
 
 | 이름 | 필수 | 설명 |
