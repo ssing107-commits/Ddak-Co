@@ -331,8 +331,16 @@ export async function deployAndGetUrl(
         buildLog
       );
       const logForError = truncateForErrorMessage(buildLog);
+      const inspector = status.inspectorUrl?.trim();
+      const debugBlock = [
+        "--- 배포 디버깅 ---",
+        `Deployment ID: ${deployment.id}`,
+        inspector
+          ? `Vercel 로그(Inspector): ${inspector}`
+          : "Vercel 로그: 대시보드 Deployments에서 위 Deployment ID로 검색해 주세요.",
+      ].join("\n");
       throw new Error(
-        `[vercel] Deployment failed: ${summary}\n\n--- Vercel build log ---\n${logForError}`
+        `[vercel] Deployment failed: ${summary}\n\n--- Vercel build log ---\n${logForError}\n\n${debugBlock}`
       );
     }
 
