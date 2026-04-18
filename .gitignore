@@ -1,0 +1,10 @@
+# 로컬·에이전트 참고용 (원격 저장소에 올리지 않음)
+AGENTS.md
+souls.md
+USER.md
+memory/
+knowledge/
+# Cursor rules는 팀/에이전트용으로 저장소에 포함
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
