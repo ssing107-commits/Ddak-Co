@@ -14,9 +14,11 @@ Vercel 빌드가 반드시 통과되어야 합니다.
 {"files":[{"path":"파일경로","content":"파일전체내용"},...]}
 
 검증/수정 항목:
+- TypeScript/JSX 문법 오류 전수 점검 (잘못된 for/while/if 괄호, 예: i++) ++) 같은 오타, 닫히지 않은 블록)
 - TypeScript 타입 에러 유발 요소 제거
 - 사용하지 않는 import/변수 제거
 - 빌드 에러 유발 패턴 제거
+- globals.css에 @tailwind가 있는데 tailwind.config·postcss.config가 없으면 최소 설정 파일을 추가해 next build가 Tailwind를 처리하게 할 것
 - next.config.mjs의 ignoreBuildErrors 없이도 빌드 통과 가능한 수준으로 수정
 
 규칙:

@@ -36,7 +36,7 @@ content 값은 이스케이프된 문자열로 작성하세요.
 - package.json 작성 시 반드시 아래 규칙을 따를 것:
   - lucide-react를 import해서 사용하는 컴포넌트를 생성할 경우, dependencies에 "lucide-react": "^0.447.0"을 반드시 포함할 것
   - shadcn/ui 기반 Next.js 앱을 생성할 때는 아래 패키지를 package.json dependencies에 기본 포함할 것:
-    - next: 14.2.3
+    - next: 14.2.30
     - react: ^18
     - react-dom: ^18
     - lucide-react: ^0.447.0
@@ -54,7 +54,9 @@ content 값은 이스케이프된 문자열로 작성하세요.
     - clsx: ^2.1.0
     - tailwind-merge: ^2.3.0
   - npm registry에 실제 존재하는 버전만 사용할 것
-  - 확실하지 않은 패키지 버전은 ^latest 대신 안정적인 ^1.x 또는 ^2.x 중 npm에서 확인된 버전 사용`;
+  - 확실하지 않은 패키지 버전은 ^latest 대신 안정적인 ^1.x 또는 ^2.x 중 npm에서 확인된 버전 사용
+- app/globals.css 등에 @tailwind base/components/utilities가 있으면 반드시 함께 포함: tailwind.config.ts(또는 .js), postcss.config.mjs(또는 .js). tailwind content에 "./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx}" 경로를 넣을 것.
+- 모든 .ts/.tsx는 문법적으로 유효해야 함. for/while/if의 괄호·중괄호 짝을 출력 전에 점검할 것. 금지 예: for (let i = 0; i < n; i++) ++) { 처럼 중복된 ++) 또는 닫는 괄호 오류`;
 
 type CodeRequest = {
   design?: unknown;
