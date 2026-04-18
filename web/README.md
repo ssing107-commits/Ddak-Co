@@ -34,6 +34,8 @@ npm run test
 
 `src/lib/*.test.ts` — 공통 유틸(Anthropic JSON 펜스 제거, `files` 정규화, 미사용 `useState` setter 후처리 등) 단위 테스트.
 
+`main` 브랜치에 push·PR 시 저장소 루트의 **GitHub Actions**에서 `npm run test` → `typecheck` → `build`를 자동 실행합니다 (`.github/workflows/ci.yml`).
+
 ## 환경 변수
 
 | 이름 | 필수 | 설명 |
