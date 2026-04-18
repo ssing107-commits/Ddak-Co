@@ -2,6 +2,7 @@ import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,17 +80,6 @@ function decodeHtmlEntities(content: string): string {
     .replace(/&#39;/g, "'");
 }
 
-/** 응답 맨 앞에 붙는 ```json / ``` 마크다운 펜스를 반복 제거 */
-function preprocessStripMarkdownJsonFence(text: string): string {
-  let t = text.trim();
-  let prev = "";
-  while (prev !== t) {
-    prev = t;
-    t = t.replace(/^```(?:json)?\s*\r?\n?/i, "").replace(/\r?\n?\s*```\s*$/i, "").trim();
-  }
-  return t;
-}
-
 function formatParseError(e: unknown): string {
   if (e instanceof Error) {
     return `${e.name}: ${e.message}${e.stack ? `\n${e.stack}` : ""}`;
@@ -124,7 +114,6 @@ function extractJsonCandidates(originalRaw: string, preprocessed: string): strin
     pushUnique(match[1]);
   }
 
-  pushUnique(preprocessStripMarkdownJsonFence(preprocessed));
   pushUnique(preprocessed);
 
   const bracePre = extractBalancedJsonObjectFallback(preprocessed);
@@ -146,7 +135,7 @@ function tryParseJsonAfterRepair(candidate: string): unknown {
 }
 
 function parseClaudeJsonWithRecovery(rawText: string): unknown {
-  const preprocessed = preprocessStripMarkdownJsonFence(rawText);
+  const preprocessed = peelOuterMarkdownJsonFences(rawText);
   const candidates = extractJsonCandidates(rawText, preprocessed);
   const attemptErrors: string[] = [];
 

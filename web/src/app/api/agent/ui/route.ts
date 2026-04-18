@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  normalizePathContentFiles,
+  type PathContentFile,
+} from "@/lib/agent-path-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,11 +31,6 @@ UI를 만드는 전문가입니다.
 - TypeScript strict 모드에서 불필요한 변수/미사용 import를 만들지 말 것
 - 한국어 UI 문구를 유지할 것`;
 
-type FileItem = {
-  path: string;
-  content: string;
-};
-
 type UiRequest = {
   files?: unknown;
   input?: unknown;
@@ -39,39 +39,19 @@ type UiRequest = {
 
 type UiPromptPayload = {
   filePaths: string[];
-  uiFiles: FileItem[];
+  uiFiles: PathContentFile[];
 };
 
-function stripJsonFence(text: string): string {
-  let s = text.trim();
-  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  return s.trim();
-}
-
-function normalizeFiles(raw: unknown): FileItem[] {
-  const list = Array.isArray(raw) ? raw : [];
-  return list
-    .filter((f) => f && typeof f === "object" && !Array.isArray(f))
-    .map((f) => {
-      const rec = f as Record<string, unknown>;
-      return {
-        path: typeof rec.path === "string" ? rec.path.trim().replace(/\\/g, "/") : "",
-        content: typeof rec.content === "string" ? rec.content : "",
-      };
-    })
-    .filter((f) => f.path && f.content);
-}
-
-function extractInputFiles(body: UiRequest): FileItem[] {
-  const direct = normalizeFiles(body.files);
+function extractInputFiles(body: UiRequest): PathContentFile[] {
+  const direct = normalizePathContentFiles(body.files);
   if (direct.length > 0) return direct;
 
-  const fromCodeFiles = normalizeFiles(body.codeFiles);
+  const fromCodeFiles = normalizePathContentFiles(body.codeFiles);
   if (fromCodeFiles.length > 0) return fromCodeFiles;
 
   if (body.input && typeof body.input === "object" && !Array.isArray(body.input)) {
     const maybeFiles = (body.input as { files?: unknown }).files;
-    return normalizeFiles(maybeFiles);
+    return normalizePathContentFiles(maybeFiles);
   }
 
   return [];
@@ -86,7 +66,7 @@ function isUiCandidatePath(path: string): boolean {
   return false;
 }
 
-function buildUiPromptPayload(files: FileItem[]): UiPromptPayload {
+function buildUiPromptPayload(files: PathContentFile[]): UiPromptPayload {
   const filePaths = files.map((f) => f.path);
   const uiFiles = files.filter(
     (f) => isUiCandidatePath(f.path) && f.content.length <= UI_INLINE_CONTENT_MAX_CHARS
@@ -94,8 +74,11 @@ function buildUiPromptPayload(files: FileItem[]): UiPromptPayload {
   return { filePaths, uiFiles };
 }
 
-function mergeUpdatedFiles(originalFiles: FileItem[], improvedFiles: FileItem[]): FileItem[] {
-  const merged = new Map<string, FileItem>();
+function mergeUpdatedFiles(
+  originalFiles: PathContentFile[],
+  improvedFiles: PathContentFile[]
+): PathContentFile[] {
+  const merged = new Map<string, PathContentFile>();
   for (const file of originalFiles) {
     merged.set(file.path, file);
   }
@@ -124,7 +107,7 @@ function stripUnusedReactStateSetters(content: string): string {
   return out;
 }
 
-function postProcessFiles(files: FileItem[]): FileItem[] {
+function postProcessFiles(files: PathContentFile[]): PathContentFile[] {
   return files.map((file) => {
     if (!/\.(ts|tsx)$/.test(file.path)) return file;
     return { ...file, content: stripUnusedReactStateSetters(file.content) };
@@ -186,12 +169,14 @@ export async function POST(req: NextRequest) {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(stripJsonFence(text));
+      parsed = JSON.parse(peelOuterMarkdownJsonFences(text));
     } catch {
       return NextResponse.json({ error: "UI 개선 응답 JSON 파싱에 실패했습니다." }, { status: 502 });
     }
 
-    const improvedFiles = normalizeFiles((parsed as { files?: unknown })?.files);
+    const improvedFiles = normalizePathContentFiles(
+      (parsed as { files?: unknown })?.files
+    );
     const mergedFiles = improvedFiles.length > 0 ? mergeUpdatedFiles(files, improvedFiles) : files;
     return NextResponse.json({ files: postProcessFiles(mergedFiles) });
   } catch (e) {

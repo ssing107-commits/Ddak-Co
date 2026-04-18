@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,12 +45,6 @@ type DesignDoc = {
   pages: Array<{ name: string; purpose: string }>;
   dataStructure: Array<{ entity: string; fields: string[] }>;
 };
-
-function stripJsonFence(text: string): string {
-  let s = text.trim();
-  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  return s.trim();
-}
 
 function extractInput(body: DesignRequest): string {
   const raw = body.input ?? body.prompt ?? body.message ?? body.idea ?? "";
@@ -163,7 +158,7 @@ export async function POST(req: NextRequest) {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(stripJsonFence(text));
+      parsed = JSON.parse(peelOuterMarkdownJsonFences(text));
     } catch {
       return NextResponse.json(
         { error: "설계 응답이 JSON 형식이 아닙니다." },

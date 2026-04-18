@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  normalizePathContentFiles,
+  type PathContentFile,
+} from "@/lib/agent-path-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import {
+  peelOuterMarkdownJsonFences,
+  sliceGreedyJsonObject,
+} from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,11 +34,6 @@ Vercel 빌드가 반드시 통과되어야 합니다.
 - TypeScript strict 기준으로 안전한 코드
 - 한국어 UI 텍스트 유지`;
 
-type FileItem = {
-  path: string;
-  content: string;
-};
-
 type QaRequest = {
   files?: unknown;
   input?: unknown;
@@ -43,39 +46,16 @@ const QA_PARSE_FALLBACK = {
   suggestions: [],
 } as const;
 
-function sanitizeClaudeResponse(text: string): string {
-  return text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-}
-
-function extractJsonObjectText(text: string): string {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  return jsonMatch ? jsonMatch[0] : text;
-}
-
-function normalizeFiles(raw: unknown): FileItem[] {
-  const list = Array.isArray(raw) ? raw : [];
-  return list
-    .filter((f) => f && typeof f === "object" && !Array.isArray(f))
-    .map((f) => {
-      const rec = f as Record<string, unknown>;
-      return {
-        path: typeof rec.path === "string" ? rec.path.trim().replace(/\\/g, "/") : "",
-        content: typeof rec.content === "string" ? rec.content : "",
-      };
-    })
-    .filter((f) => f.path && f.content);
-}
-
-function extractInputFiles(body: QaRequest): FileItem[] {
-  const direct = normalizeFiles(body.files);
+function extractInputFiles(body: QaRequest): PathContentFile[] {
+  const direct = normalizePathContentFiles(body.files);
   if (direct.length > 0) return direct;
 
-  const fromUiFiles = normalizeFiles(body.uiFiles);
+  const fromUiFiles = normalizePathContentFiles(body.uiFiles);
   if (fromUiFiles.length > 0) return fromUiFiles;
 
   if (body.input && typeof body.input === "object" && !Array.isArray(body.input)) {
     const maybeFiles = (body.input as { files?: unknown }).files;
-    return normalizeFiles(maybeFiles);
+    return normalizePathContentFiles(maybeFiles);
   }
 
   return [];
@@ -106,7 +86,7 @@ function removeIgnoreBuildOptions(content: string): string {
     .replace(/\n\s*eslint:\s*\{\s*ignoreDuringBuilds:\s*true\s*\},?/g, "");
 }
 
-function postProcessFiles(files: FileItem[]): FileItem[] {
+function postProcessFiles(files: PathContentFile[]): PathContentFile[] {
   return files.map((file) => {
     let content = file.content;
     if (/\.(ts|tsx)$/.test(file.path)) {
@@ -167,8 +147,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "QA 응답을 처리할 수 없습니다." }, { status: 502 });
     }
 
-    const sanitized = sanitizeClaudeResponse(text);
-    const jsonStr = extractJsonObjectText(sanitized);
+    const peeled = peelOuterMarkdownJsonFences(text);
+    const jsonStr = sliceGreedyJsonObject(peeled);
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonStr);
@@ -176,7 +156,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(QA_PARSE_FALLBACK);
     }
 
-    const finalFiles = normalizeFiles((parsed as { files?: unknown }).files);
+    const finalFiles = normalizePathContentFiles((parsed as { files?: unknown }).files);
     if (finalFiles.length === 0) {
       return NextResponse.json({ error: "검증 완료 파일 목록이 비어 있습니다." }, { status: 502 });
     }
