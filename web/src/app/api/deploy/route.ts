@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createRepo, pushCode } from "@/lib/github";
-import { createProject, deployAndGetUrl } from "@/lib/vercel";
+import {
+  createProject,
+  deployAndGetUrl,
+  VercelDeploymentFailedError,
+} from "@/lib/vercel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -185,6 +189,18 @@ export async function POST(req: NextRequest) {
     console.log("[deploy] 9. Vercel 배포 완료");
   } catch (e) {
     console.error("[deploy] deployAndGetUrl 에러 전체:", e);
+    if (e instanceof VercelDeploymentFailedError) {
+      const { summary, deploymentId, inspectorUrl, buildLogTail } = e.details;
+      return NextResponse.json(
+        {
+          error: `Vercel 배포 실패: ${summary}`,
+          deploymentId,
+          ...(inspectorUrl ? { inspectorUrl } : {}),
+          buildLogTail,
+        },
+        { status: 502 }
+      );
+    }
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: `Vercel 배포 실패: ${msg}` }, { status: 502 });
   }

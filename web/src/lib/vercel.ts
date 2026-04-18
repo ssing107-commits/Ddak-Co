@@ -75,6 +75,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Vercel 배포가 ERROR/CANCELED로 끝났을 때 `/api/deploy` 등에서 구조화 응답으로 옮길 수 있는 정보 */
+export type VercelDeploymentFailureDetails = {
+  summary: string;
+  deploymentId: string;
+  inspectorUrl?: string;
+  buildLogTail: string;
+};
+
+export class VercelDeploymentFailedError extends Error {
+  readonly details: VercelDeploymentFailureDetails;
+
+  constructor(details: VercelDeploymentFailureDetails) {
+    super(`[vercel] Deployment failed: ${details.summary}`);
+    this.name = "VercelDeploymentFailedError";
+    this.details = details;
+  }
+}
+
 const BUILD_LOG_FETCH_MAX_EVENTS = 4000;
 const BUILD_LOG_ERROR_APPEND_MAX_CHARS = 14_000;
 const BUILD_LOG_RAW_MAX_CHARS = 350_000;
@@ -332,16 +350,12 @@ export async function deployAndGetUrl(
       );
       const logForError = truncateForErrorMessage(buildLog);
       const inspector = status.inspectorUrl?.trim();
-      const debugBlock = [
-        "--- 배포 디버깅 ---",
-        `Deployment ID: ${deployment.id}`,
-        inspector
-          ? `Vercel 로그(Inspector): ${inspector}`
-          : "Vercel 로그: 대시보드 Deployments에서 위 Deployment ID로 검색해 주세요.",
-      ].join("\n");
-      throw new Error(
-        `[vercel] Deployment failed: ${summary}\n\n--- Vercel build log ---\n${logForError}\n\n${debugBlock}`
-      );
+      throw new VercelDeploymentFailedError({
+        summary,
+        deploymentId: deployment.id,
+        ...(inspector ? { inspectorUrl: inspector } : {}),
+        buildLogTail: logForError,
+      });
     }
 
     await sleep(3000);

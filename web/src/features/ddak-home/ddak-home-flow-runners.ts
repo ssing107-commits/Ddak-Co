@@ -7,7 +7,7 @@ import {
   buildEditableFeatures,
   pickSelectedFeatures,
 } from "./feature-helpers";
-import { postJson } from "./post-json";
+import { ApiError, postJson } from "./post-json";
 import type {
   AppPhase,
   DeployContext,
@@ -18,6 +18,28 @@ import type {
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+/** /api/deploy 502 구조화 본문이 있으면 사이드 로그에 Inspector·로그 tail 추가 */
+function appendDeployStructuredFailure(
+  appendLog: (message: string) => void,
+  err: unknown
+): void {
+  if (!(err instanceof ApiError) || err.status !== 502) return;
+  const b = err.body;
+  if (!b || typeof b !== "object") return;
+  const o = b as Record<string, unknown>;
+  if (typeof o.buildLogTail !== "string" && typeof o.deploymentId !== "string") {
+    return;
+  }
+  if (typeof o.inspectorUrl === "string" && o.inspectorUrl.trim()) {
+    appendLog(`Vercel Inspector: ${o.inspectorUrl.trim()}`);
+  } else if (typeof o.deploymentId === "string") {
+    appendLog(`Deployment ID: ${o.deploymentId}`);
+  }
+  if (typeof o.buildLogTail === "string" && o.buildLogTail.trim()) {
+    appendLog(`--- 빌드 로그(일부) ---\n${o.buildLogTail.trim()}`);
+  }
 }
 
 /** 1단계: 아이디어 → design API → 기획서·기능 초안 */
@@ -143,6 +165,7 @@ export async function runDraftDeployment(ctx: {
       "2단계 완료: 초안 배포가 끝났습니다. 계속 진행하기를 눌러 완성하세요."
     );
   } catch (err) {
+    appendDeployStructuredFailure(ctx.appendLog, err);
     const msg = errorMessage(err, "네트워크 오류가 발생했습니다.");
     ctx.setError(msg);
     ctx.setPhase("planning");
@@ -204,6 +227,7 @@ export async function runFinalizeDeployment(ctx: {
     ctx.setPhase("done");
     ctx.appendLog("3단계 완료: 최종 배포가 완료되었습니다.");
   } catch (err) {
+    appendDeployStructuredFailure(ctx.appendLog, err);
     const msg = errorMessage(err, "네트워크 오류가 발생했습니다.");
     ctx.setError(msg);
     ctx.setPhase("draft-ready");
