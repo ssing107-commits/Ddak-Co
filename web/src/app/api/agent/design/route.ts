@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 const SYSTEM_PROMPT = `당신은 비전공자 사장님을 위한 앱을 설계하는 전문가입니다.
-복잡한 기능보다 핵심 기능 하나를 완벽하게 설계하세요.
+coreFeatures 3~5개는 각각 **사용자가 화면에서 바로 체감할 수 있는 행동**(눌러보기, 입력하기, 목록 넘기기 등)으로 설명 가능해야 합니다. 추상적인 슬로건만 쓰지 마세요.
 
 반드시 JSON 객체만 출력하세요. 마크다운/코드블록/설명 문장 금지.
 

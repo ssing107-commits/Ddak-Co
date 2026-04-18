@@ -25,7 +25,7 @@ Vercel 빌드가 반드시 통과되어야 합니다.
 검증/수정 항목:
 - TypeScript/JSX 문법 오류 전수 점검 (잘못된 for/while/if 괄호, 예: i++) ++) 같은 오타, 닫히지 않은 블록)
 - TypeScript 타입 에러 유발 요소 제거
-- 사용하지 않는 import/변수 제거
+- 사용하지 않는 import/변수 제거 (단, 버튼·폼 등 **UI 상호작용에 쓰이는 state/setState·핸들러**는 빌드용으로 제거하지 말 것)
 - 빌드 에러 유발 패턴 제거
 - globals.css에 @tailwind가 있는데 tailwind.config·postcss.config가 없으면 최소 설정 파일을 추가해 next build가 Tailwind를 처리하게 할 것
 - next.config.mjs의 ignoreBuildErrors 없이도 빌드 통과 가능한 수준으로 수정
@@ -39,6 +39,7 @@ type QaRequest = {
   files?: unknown;
   input?: unknown;
   uiFiles?: unknown;
+  designDoc?: unknown;
 };
 
 const QA_PARSE_FALLBACK = {
@@ -97,11 +98,14 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `아래 코드를 QA 기준으로 검수/수정해 최종 파일 JSON으로 반환하세요.\n\n${JSON.stringify(
-            { files },
-            null,
-            2
-          )}`,
+          content:
+            `아래 코드를 QA 기준으로 검수/수정해 최종 파일 JSON으로 반환하세요.\n` +
+            (body.designDoc &&
+            typeof body.designDoc === "object" &&
+            !Array.isArray(body.designDoc)
+              ? `기획서 designDoc가 함께 전달되었습니다. coreFeatures 각각에 대응하는 **사용자 조작 요소**가 UI에 남아 있는지 확인하고, 빌드 통과를 이유로 상호작용만 덜어내지 마세요.\n`
+              : "") +
+            `\n${JSON.stringify({ files }, null, 2)}`,
         },
       ],
     });

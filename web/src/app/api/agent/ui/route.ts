@@ -37,6 +37,8 @@ type UiRequest = {
   files?: unknown;
   input?: unknown;
   codeFiles?: unknown;
+  /** 기획서(코드 에이전트와 동일 스키마) — 기능별 상호작용 보강에 사용 */
+  designDoc?: unknown;
 };
 
 type UiPromptPayload = {
@@ -59,7 +61,7 @@ function extractInputFiles(body: UiRequest): PathContentFile[] {
   return [];
 }
 
-const UI_INLINE_CONTENT_MAX_CHARS = 12000;
+const UI_INLINE_CONTENT_MAX_CHARS = 26_000;
 
 function isUiCandidatePath(path: string): boolean {
   if (path === "app/page.tsx") return true;
@@ -132,9 +134,16 @@ export async function POST(req: NextRequest) {
           content:
             `아래 입력을 기준으로 UI/UX를 개선하세요.\n` +
             `- filePaths: 전체 파일 경로 목록 (컨텍스트)\n` +
-            `- uiFiles: 실제 코드 본문이 제공된 UI 관련 파일만 포함\n` +
-            `- uiFiles에 없는 파일은 본문 없이 경로만 주어진 상태이므로 수정 대상으로 삼지 마세요.\n\n` +
-            `${JSON.stringify(promptPayload, null, 2)}`,
+            `- uiFiles: 실제 코드 본문이 포함된 UI 관련 파일\n` +
+            `- uiFiles에만 본문이 있으므로, **반드시 반환하는 files는 uiFiles에 있던 경로만** 수정하세요. (경로만 있고 본문 없는 파일을 새로 만들어 채우지 마세요.)\n` +
+            `- designDoc가 있으면 coreFeatures **각각**이 앱 안에서 **눈에 보이는 상호작용**(버튼·폼·토글·목록·탭 등)으로 드러나게 하세요. 설명 문구만 있는 카드로 끝내지 마세요.\n\n` +
+            `${JSON.stringify(
+              body.designDoc && typeof body.designDoc === "object" && !Array.isArray(body.designDoc)
+                ? { ...promptPayload, designDoc: body.designDoc }
+                : promptPayload,
+              null,
+              2
+            )}`,
         },
       ],
     });

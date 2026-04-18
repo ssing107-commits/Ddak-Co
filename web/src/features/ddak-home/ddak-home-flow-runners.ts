@@ -278,6 +278,7 @@ export async function runFinalizeDeployment(ctx: {
     ctx.appendLog("3단계 시작: UI 에이전트 실행 중...");
     const uiResult = await postJson<{ files: FileItem[] }>("/api/agent/ui", {
       files: ctx.draftFiles,
+      designDoc: ctx.designDoc,
     });
     if (!Array.isArray(uiResult.files) || uiResult.files.length === 0) {
       throw new Error("UI 개선 결과 파일이 비어 있습니다.");
@@ -286,6 +287,7 @@ export async function runFinalizeDeployment(ctx: {
     ctx.appendLog("3단계 진행: QA 에이전트 실행 중...");
     const qaResult = await postJson<{ files: FileItem[] }>("/api/agent/qa", {
       files: uiResult.files,
+      designDoc: ctx.designDoc,
     });
     if (!Array.isArray(qaResult.files) || qaResult.files.length === 0) {
       throw new Error("QA 결과 파일이 비어 있습니다.");
