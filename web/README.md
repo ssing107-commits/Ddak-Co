@@ -32,7 +32,7 @@ cd web
 npm run test
 ```
 
-`src/lib/*.test.ts` — 공통 유틸(Anthropic JSON 펜스 제거, `files` 정규화 등) 단위 테스트.
+`src/lib/*.test.ts` — 공통 유틸(Anthropic JSON 펜스 제거, `files` 정규화, 미사용 `useState` setter 후처리 등) 단위 테스트.
 
 ## 환경 변수
 
