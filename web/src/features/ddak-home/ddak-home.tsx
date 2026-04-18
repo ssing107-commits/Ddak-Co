@@ -22,15 +22,15 @@ export function DdakHome() {
     );
   }
 
-  const { running } = flow;
+  const { running, showAgentLog } = flow;
 
   return (
     <div className="min-h-full bg-background px-4 py-10 lg:py-12">
       <div
-        className={`mx-auto flex w-full max-w-6xl flex-col gap-8 ${running ? "lg:flex-row lg:items-start lg:gap-10" : ""}`}
+        className={`mx-auto flex w-full max-w-6xl flex-col gap-8 ${showAgentLog ? "lg:flex-row lg:items-start lg:gap-10" : ""}`}
       >
         <div
-          className={`mx-auto w-full max-w-lg shrink-0 space-y-8 ${running ? "lg:mx-0" : ""}`}
+          className={`mx-auto w-full max-w-lg shrink-0 space-y-8 ${showAgentLog ? "lg:mx-0" : ""}`}
         >
           <div className="flex items-center justify-between gap-4">
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">
@@ -50,9 +50,15 @@ export function DdakHome() {
           />
 
           {flow.error && (
-            <p className="text-center text-sm text-destructive lg:text-left">
-              {flow.error}
-            </p>
+            <div className="space-y-1 text-center text-sm text-destructive lg:text-left">
+              <p>{flow.error}</p>
+              {flow.logMessages.length > 0 && (
+                <p className="text-xs font-normal text-muted-foreground">
+                  Vercel Inspector 링크와 빌드 로그 일부는 아래「에이전트 작업
+                  로그」에 있습니다. (모바일은 스크롤하여 확인)
+                </p>
+              )}
+            </div>
           )}
 
           {flow.designDoc && (
@@ -98,7 +104,7 @@ export function DdakHome() {
           )}
         </div>
 
-        {running && (
+        {flow.showAgentLog && (
           <AgentLogAside logMessages={flow.logMessages} busy={flow.busy} />
         )}
       </div>

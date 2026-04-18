@@ -119,6 +119,9 @@ export function useDdakHomeFlow() {
 
   const running =
     phase === "draft-running" || phase === "final-running";
+  /** 배포 실패 후 phase가 planning으로 돌아가도 로그·링크를 볼 수 있게 함 */
+  const showAgentLog =
+    running || logMessages.length > 0;
   const anyFeatureSelected =
     pickSelectedFeatures(featureDrafts).length > 0;
 
@@ -173,6 +176,7 @@ export function useDdakHomeFlow() {
     startDraftDeployment,
     continueToFinalize,
     running,
+    showAgentLog,
     anyFeatureSelected,
     stageRows,
   };
