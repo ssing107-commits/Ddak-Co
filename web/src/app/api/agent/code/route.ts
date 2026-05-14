@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
-import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
+import { peelOuterMarkdownJsonFences, sliceGreedyJsonObject } from "@/lib/anthropic-json-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +14,7 @@ const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 
 반드시 아래 JSON 형식으로만 응답하세요.
 마크다운 코드블록 없이 순수 JSON만 반환하세요.
+응답 본문은 다른 문자 없이 JSON 객체의 여는 중괄호로 시작해야 합니다(앞에 샵·별표·한글 설명 금지).
 content 값은 이스케이프된 문자열로 작성하세요.
 절대로 base64 인코딩하지 마세요.
 
@@ -84,6 +85,13 @@ function formatParseError(e: unknown): string {
   return String(e);
 }
 
+/** `# 설명` 등 앞부분을 잘라 `{"files":` 로 시작하도록 함 */
+function stripToLeadingFilesJson(text: string): string {
+  const m = text.match(/\{\s*"files"\s*:/);
+  if (!m || m.index === undefined) return text.trim();
+  return text.slice(m.index).trim();
+}
+
 /** 펜스가 열린 채 닫히지 않은 경우 등: 첫 { ~ 마지막 } 구간 추출 */
 function extractBalancedJsonObjectFallback(text: string): string | null {
   const first = text.indexOf("{");
@@ -100,24 +108,42 @@ function extractJsonCandidates(originalRaw: string, preprocessed: string): strin
     if (!candidates.includes(v)) candidates.push(v);
   };
 
+  const anchored = stripToLeadingFilesJson(originalRaw);
+  const peeledAnchored = peelOuterMarkdownJsonFences(anchored);
+  const greedyAnchored = sliceGreedyJsonObject(peeledAnchored);
+
+  /** `{"files"` 로 시작하는 후보만 우선 시도 (마크다운 설명 제외) */
+  const pushJsonLike = (value: string) => {
+    const v = value.trim();
+    if (!v.startsWith("{")) return;
+    pushUnique(v);
+  };
+
+  pushJsonLike(peeledAnchored);
+  pushJsonLike(greedyAnchored);
+  pushJsonLike(anchored);
+
   const jsonFence = /```json\s*([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
   while ((match = jsonFence.exec(originalRaw)) !== null) {
-    pushUnique(match[1]);
+    pushJsonLike(match[1]);
   }
 
   const genericFence = /```\s*([\s\S]*?)```/gi;
   while ((match = genericFence.exec(originalRaw)) !== null) {
-    pushUnique(match[1]);
+    pushJsonLike(match[1]);
   }
 
-  pushUnique(preprocessed);
+  pushJsonLike(preprocessed);
+  pushJsonLike(peelOuterMarkdownJsonFences(originalRaw));
+  pushJsonLike(sliceGreedyJsonObject(preprocessed));
+  pushJsonLike(sliceGreedyJsonObject(originalRaw));
 
-  const bracePre = extractBalancedJsonObjectFallback(preprocessed);
-  if (bracePre) pushUnique(bracePre);
+  const bracePre = extractBalancedJsonObjectFallback(peeledAnchored);
+  if (bracePre) pushJsonLike(bracePre);
 
   const braceOrig = extractBalancedJsonObjectFallback(originalRaw);
-  if (braceOrig) pushUnique(braceOrig);
+  if (braceOrig) pushJsonLike(braceOrig);
 
   return candidates;
 }
@@ -132,7 +158,7 @@ function tryParseJsonAfterRepair(candidate: string): unknown {
 }
 
 function parseClaudeJsonWithRecovery(rawText: string): unknown {
-  const preprocessed = peelOuterMarkdownJsonFences(rawText);
+  const preprocessed = peelOuterMarkdownJsonFences(stripToLeadingFilesJson(rawText));
   const candidates = extractJsonCandidates(rawText, preprocessed);
   const attemptErrors: string[] = [];
 
@@ -231,6 +257,7 @@ export async function POST(req: NextRequest) {
         "Vercel 또는 npm run build가 실패했습니다. QA 검수를 거친 baseline을 바탕으로, **동일 path 구조를 유지한 채** 빌드가 통과하도록 전체 파일 JSON을 다시 출력하세요.",
         "불필요한 기능 추가·대규모 리팩터링은 금지하고, 로그에 나온 오류를 우선 해결하세요.",
         "반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.",
+        "응답 첫 글자는 `{` 여야 합니다. `#`·`**`·한글 설명·마크다운 코드펜스(```)를 출력하지 마세요.",
         "",
         deploySummary ? `=== 배포/빌드 요약 ===\n${deploySummary}\n` : "",
         `=== buildLogTail ===\n${buildLogTail}\n`,
@@ -252,7 +279,7 @@ ${JSON.stringify(design, null, 2)}`;
     const { text } = await callAnthropicMessages({
       apiKey,
       model,
-      max_tokens: draftMode ? 12_288 : 16384,
+      max_tokens: repairMode ? 24_576 : draftMode ? 12_288 : 16384,
       system: SYSTEM_PROMPT,
       messages: [
         {
