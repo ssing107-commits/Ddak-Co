@@ -1,9 +1,8 @@
-import { jsonrepair } from "jsonrepair";
 import { NextRequest, NextResponse } from "next/server";
 
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
-import { peelOuterMarkdownJsonFences, sliceGreedyJsonObject } from "@/lib/anthropic-json-text";
+import { parseAgentFilesJsonResponse } from "@/lib/parse-agent-files-json";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,116 +76,6 @@ function decodeHtmlEntities(content: string): string {
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, "\"")
     .replace(/&#39;/g, "'");
-}
-
-function formatParseError(e: unknown): string {
-  if (e instanceof Error) {
-    return `${e.name}: ${e.message}${e.stack ? `\n${e.stack}` : ""}`;
-  }
-  return String(e);
-}
-
-/** `# 설명` 등 앞부분을 잘라 `{"files":` 로 시작하도록 함 */
-function stripToLeadingFilesJson(text: string): string {
-  const m = text.match(/\{\s*"files"\s*:/);
-  if (!m || m.index === undefined) return text.trim();
-  return text.slice(m.index).trim();
-}
-
-/** 펜스가 열린 채 닫히지 않은 경우 등: 첫 { ~ 마지막 } 구간 추출 */
-function extractBalancedJsonObjectFallback(text: string): string | null {
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first < 0 || last <= first) return null;
-  return text.slice(first, last + 1);
-}
-
-function extractJsonCandidates(originalRaw: string, preprocessed: string): string[] {
-  const candidates: string[] = [];
-  const pushUnique = (value: string) => {
-    const v = value.trim();
-    if (!v) return;
-    if (!candidates.includes(v)) candidates.push(v);
-  };
-
-  const anchored = stripToLeadingFilesJson(originalRaw);
-  const peeledAnchored = peelOuterMarkdownJsonFences(anchored);
-  const greedyAnchored = sliceGreedyJsonObject(peeledAnchored);
-
-  /** `{"files"` 로 시작하는 후보만 우선 시도 (마크다운 설명 제외) */
-  const pushJsonLike = (value: string) => {
-    const v = value.trim();
-    if (!v.startsWith("{")) return;
-    pushUnique(v);
-  };
-
-  pushJsonLike(peeledAnchored);
-  pushJsonLike(greedyAnchored);
-  pushJsonLike(anchored);
-
-  const jsonFence = /```json\s*([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-  while ((match = jsonFence.exec(originalRaw)) !== null) {
-    pushJsonLike(match[1]);
-  }
-
-  const genericFence = /```\s*([\s\S]*?)```/gi;
-  while ((match = genericFence.exec(originalRaw)) !== null) {
-    pushJsonLike(match[1]);
-  }
-
-  pushJsonLike(preprocessed);
-  pushJsonLike(peelOuterMarkdownJsonFences(originalRaw));
-  pushJsonLike(sliceGreedyJsonObject(preprocessed));
-  pushJsonLike(sliceGreedyJsonObject(originalRaw));
-
-  const bracePre = extractBalancedJsonObjectFallback(peeledAnchored);
-  if (bracePre) pushJsonLike(bracePre);
-
-  const braceOrig = extractBalancedJsonObjectFallback(originalRaw);
-  if (braceOrig) pushJsonLike(braceOrig);
-
-  return candidates;
-}
-
-function tryParseJsonOnce(candidate: string): unknown {
-  return JSON.parse(candidate);
-}
-
-function tryParseJsonAfterRepair(candidate: string): unknown {
-  const repaired = jsonrepair(candidate);
-  return JSON.parse(repaired);
-}
-
-function parseClaudeJsonWithRecovery(rawText: string): unknown {
-  const preprocessed = peelOuterMarkdownJsonFences(stripToLeadingFilesJson(rawText));
-  const candidates = extractJsonCandidates(rawText, preprocessed);
-  const attemptErrors: string[] = [];
-
-  for (let i = 0; i < candidates.length; i++) {
-    const candidate = candidates[i];
-    const label = `#${i + 1}`;
-    try {
-      return tryParseJsonOnce(candidate);
-    } catch (e1) {
-      try {
-        return tryParseJsonAfterRepair(candidate);
-      } catch (e2) {
-        attemptErrors.push(
-          `${label} candidate(앞 400자): ${candidate.slice(0, 400).replace(/\s+/g, " ")}\n` +
-            `  JSON.parse: ${formatParseError(e1)}\n` +
-            `  jsonrepair+JSON.parse: ${formatParseError(e2)}`
-        );
-      }
-    }
-  }
-
-  const rawHead = rawText.slice(0, 1500);
-  throw new Error(
-    `코드 생성 응답 JSON 파싱에 실패했습니다.\n` +
-      `시도별 parseError(전체):\n${attemptErrors.join("\n---\n")}\n` +
-      `raw(앞 1500자):\n${rawHead}`
-  );
 }
 
 function extractDesignInput(body: CodeRequest): unknown {
@@ -298,7 +187,7 @@ ${JSON.stringify(design, null, 2)}`;
 
     let parsed: unknown;
     try {
-      parsed = parseClaudeJsonWithRecovery(rawText);
+      parsed = parseAgentFilesJsonResponse(rawText, "코드 생성");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[api/agent/code] JSON parse failure:", msg);

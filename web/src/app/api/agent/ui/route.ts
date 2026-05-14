@@ -6,7 +6,7 @@ import {
 } from "@/lib/agent-path-files";
 import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
-import { peelOuterMarkdownJsonFences } from "@/lib/anthropic-json-text";
+import { parseAgentFilesJsonResponse } from "@/lib/parse-agent-files-json";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ UI를 만드는 전문가입니다.
 
 입력으로 받은 코드 파일 정보를 UI/UX 중심으로 개선하세요.
 반드시 아래 JSON만 출력하세요. 마크다운/설명/코드블록 금지.
+응답 본문은 다른 문자 없이 JSON 객체의 여는 중괄호로 시작해야 합니다(앞에 샵·별표·한글 설명 금지).
 {"files":[{"path":"파일경로","content":"파일전체내용"},...]}
 
 반드시 반영할 개선 항목:
@@ -136,7 +137,8 @@ export async function POST(req: NextRequest) {
             `- filePaths: 전체 파일 경로 목록 (컨텍스트)\n` +
             `- uiFiles: 실제 코드 본문이 포함된 UI 관련 파일\n` +
             `- uiFiles에만 본문이 있으므로, **반드시 반환하는 files는 uiFiles에 있던 경로만** 수정하세요. (경로만 있고 본문 없는 파일을 새로 만들어 채우지 마세요.)\n` +
-            `- designDoc가 있으면 coreFeatures **각각**이 앱 안에서 **눈에 보이는 상호작용**(버튼·폼·토글·목록·탭 등)으로 드러나게 하세요. 설명 문구만 있는 카드로 끝내지 마세요.\n\n` +
+            `- designDoc가 있으면 coreFeatures **각각**이 앱 안에서 **눈에 보이는 상호작용**(버튼·폼·토글·목록·탭 등)으로 드러나게 하세요. 설명 문구만 있는 카드로 끝내지 마세요.\n` +
+            `- 응답은 설명 없이 {"files":...} JSON만 출력하세요.\n\n` +
             `${JSON.stringify(
               body.designDoc && typeof body.designDoc === "object" && !Array.isArray(body.designDoc)
                 ? { ...promptPayload, designDoc: body.designDoc }
@@ -154,9 +156,11 @@ export async function POST(req: NextRequest) {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(peelOuterMarkdownJsonFences(text));
-    } catch {
-      return NextResponse.json({ error: "UI 개선 응답 JSON 파싱에 실패했습니다." }, { status: 502 });
+      parsed = parseAgentFilesJsonResponse(text, "UI 개선");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[api/agent/ui] JSON parse failure:", msg);
+      return NextResponse.json({ error: msg }, { status: 502 });
     }
 
     const improvedFiles = normalizePathContentFiles(
