@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
 
-import { designDocSchema } from "@/lib/agent-schemas";
+import { generateDesignDocObject } from "@/lib/agent-generate-object";
 import {
   createAnthropicLanguageModel,
   getAnthropicApiKeyFromEnv,
@@ -63,9 +62,8 @@ export async function POST(req: NextRequest) {
 
   try {
     console.log("[design] 호출 시작, key exists:", !!process.env.ANTHROPIC_API_KEY);
-    const { object } = await generateObject({
+    const { object } = await generateDesignDocObject({
       model: languageModel,
-      schema: designDocSchema,
       system: SYSTEM_PROMPT,
       prompt: `사용자 요청: ${userInput}`,
       maxTokens: 2048,

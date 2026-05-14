@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
 
 import {
   normalizePathContentFiles,
   type PathContentFile,
 } from "@/lib/agent-path-files";
-import { agentFilesSchema } from "@/lib/agent-schemas";
+import { generateAgentFilesObject } from "@/lib/agent-generate-object";
 import {
   createAnthropicLanguageModel,
   getAnthropicApiKeyFromEnv,
@@ -113,9 +112,8 @@ export async function POST(req: NextRequest) {
     `\n${JSON.stringify({ files }, null, 2)}`;
 
   try {
-    const { object } = await generateObject({
+    const { object } = await generateAgentFilesObject({
       model: languageModel,
-      schema: agentFilesSchema,
       system: SYSTEM_PROMPT,
       prompt: userPrompt,
       maxTokens: 16_384,

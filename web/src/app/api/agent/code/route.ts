@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
 
-import { agentFilesSchema } from "@/lib/agent-schemas";
+import { generateAgentFilesObject } from "@/lib/agent-generate-object";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 import {
   createAnthropicLanguageModel,
@@ -160,9 +159,8 @@ ${draftMode ? `이번 요청은 빠른 초안 배포용이지만, **허전한 �
 ${JSON.stringify(design, null, 2)}`;
 
   try {
-    const { object } = await generateObject({
+    const { object } = await generateAgentFilesObject({
       model: languageModel,
-      schema: agentFilesSchema,
       system: SYSTEM_PROMPT,
       prompt: userContent,
       maxTokens,
