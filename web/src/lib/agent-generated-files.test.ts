@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   postProcessAgentFile,
   removeNextConfigLooseBuildSkips,
+  sanitizeAgentTsConfigJson,
 } from "./agent-generated-files";
 
 describe("removeNextConfigLooseBuildSkips", () => {
@@ -17,6 +18,25 @@ describe("removeNextConfigLooseBuildSkips", () => {
   });
 });
 
+describe("sanitizeAgentTsConfigJson", () => {
+  it("useDefineForEnumMembers를 제거한다", () => {
+    const raw = JSON.stringify(
+      {
+        compilerOptions: {
+          strict: true,
+          useDefineForEnumMembers: true,
+          jsx: "preserve",
+        },
+      },
+      null,
+      2
+    );
+    const out = sanitizeAgentTsConfigJson(raw);
+    expect(out).not.toContain("useDefineForEnumMembers");
+    expect(out).toContain('"strict": true');
+  });
+});
+
 describe("postProcessAgentFile", () => {
   it("next.config.mjs에 느슨한 빌드 스킵 제거를 적용한다", () => {
     const cfg = `export default {\n  typescript: { ignoreBuildErrors: true },\n};`;
@@ -28,5 +48,11 @@ describe("postProcessAgentFile", () => {
     const src = `const [x, setX] = useState(0);\nexport default function A(){ return x; }`;
     const out = postProcessAgentFile("app/a.tsx", src);
     expect(out).toContain("const [x] = useState");
+  });
+
+  it("tsconfig.json에서 useDefineForEnumMembers를 제거한다", () => {
+    const cfg = `{\n  "compilerOptions": {\n    "strict": true,\n    "useDefineForEnumMembers": true\n  }\n}`;
+    const out = postProcessAgentFile("tsconfig.json", cfg);
+    expect(out).not.toContain("useDefineForEnumMembers");
   });
 });
