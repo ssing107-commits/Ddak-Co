@@ -2,7 +2,7 @@
  * GitHub 푸시 시 항상 병합되는 기본 파일(생성 앱 루트 기준 경로).
  * - Tailwind 전용 UI 키트(components/ui, lib/utils)
  * - Vercel 등 CI에서 npm ECONNRESET 완화용 .npmrc
- * 요청 files가 동일 path를 주면 요청 쪽이 우선한다.
+ * 동일 path는 **사용자 files 이후 기본값이 덮어써** UI 키트가 항상 유효하게 유지된다.
  */
 
 export type DeployDefaultFile = { path: string; content: string };
@@ -414,10 +414,11 @@ export function getDeployDefaultUiFiles(): DeployDefaultFile[] {
 export function mergeDeployFilesWithDefaults(userFiles: DeployDefaultFile[]): DeployDefaultFile[] {
   const norm = (p: string) => p.trim().replace(/\\/g, "/").replace(/^\/+/, "");
   const map = new Map<string, string>();
-  for (const f of getDeployDefaultUiFiles()) {
+  // 사용자 파일 먼저, UI 키트·.npmrc 등 기본값이 나중에 덮어써 항상 올바른 components/ui/* 유지
+  for (const f of userFiles) {
     map.set(norm(f.path), f.content);
   }
-  for (const f of userFiles) {
+  for (const f of getDeployDefaultUiFiles()) {
     map.set(norm(f.path), f.content);
   }
   return [...map.entries()].map(([path, content]) => ({ path, content }));

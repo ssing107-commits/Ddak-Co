@@ -12,11 +12,20 @@ export class ApiError extends Error {
 }
 
 export async function postJson<T>(path: string, payload: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    const hint =
+      err instanceof TypeError && err.message === "Failed to fetch"
+        ? " (네트워크 끊김·요청 본문 과대·서버 시간 초과일 수 있습니다.)"
+        : "";
+    throw new Error(`${path} 요청 실패${hint}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const text = await res.text();
   let data: unknown;

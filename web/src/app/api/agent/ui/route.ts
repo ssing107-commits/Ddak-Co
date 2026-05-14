@@ -5,6 +5,7 @@ import {
   type PathContentFile,
 } from "@/lib/agent-path-files";
 import { generateAgentFilesObject } from "@/lib/agent-generate-object";
+import { mergeDeployFilesWithDefaults } from "@/lib/deploy-default-ui-files";
 import {
   createAnthropicLanguageModel,
   getAnthropicApiKeyFromEnv,
@@ -14,7 +15,7 @@ import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT = `당신은 비개발자 사장님이 한눈에 이해할 수 있는
 UI를 만드는 전문가입니다.
@@ -111,13 +112,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const files = extractInputFiles(body);
-  if (files.length === 0) {
+  const rawFiles = extractInputFiles(body);
+  if (rawFiles.length === 0) {
     return NextResponse.json(
       { error: "코드 파일 목록(files)이 필요합니다." },
       { status: 400 }
     );
   }
+  const files = mergeDeployFilesWithDefaults(rawFiles);
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001";
   const promptPayload = buildUiPromptPayload(files);

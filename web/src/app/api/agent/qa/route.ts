@@ -11,10 +11,11 @@ import {
   isAnthropicUnauthorizedError,
 } from "@/lib/anthropic-api";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
+import { mergeDeployFilesWithDefaults } from "@/lib/deploy-default-ui-files";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT = `당신은 코드 품질 검수 전문가입니다.
 Vercel 빌드가 반드시 통과되어야 합니다.
@@ -76,13 +77,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const files = extractInputFiles(body);
-  if (files.length === 0) {
+  const rawFiles = extractInputFiles(body);
+  if (rawFiles.length === 0) {
     return NextResponse.json(
       { error: "UI 개선 코드 파일 목록(files)이 필요합니다." },
       { status: 400 }
     );
   }
+  const files = mergeDeployFilesWithDefaults(rawFiles);
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001";
   const languageModel = createAnthropicLanguageModel(apiKey, model);

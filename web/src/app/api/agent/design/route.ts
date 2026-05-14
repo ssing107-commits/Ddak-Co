@@ -9,7 +9,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT = `당신은 비전공자 사장님을 위한 앱을 설계하는 전문가입니다.
 coreFeatures 3~5개는 각각 **사용자가 화면에서 바로 체감할 수 있는 행동**(눌러보기, 입력하기, 목록 넘기기 등)으로 설명 가능해야 합니다. 추상적인 슬로건만 쓰지 마세요.

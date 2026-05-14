@@ -11,10 +11,11 @@ import {
   isAnthropicUnauthorizedError,
 } from "@/lib/anthropic-api";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
+import { mergeDeployFilesWithDefaults } from "@/lib/deploy-default-ui-files";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT = `당신은 Vercel 또는 로컬 npm run build 실패 로그를 보고 코드를 고치는 전문가입니다.
 
@@ -65,13 +66,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const { files, buildLogTail, deploySummary } = extractBody(body);
-  if (files.length === 0) {
+  const { files: rawFiles, buildLogTail, deploySummary } = extractBody(body);
+  if (rawFiles.length === 0) {
     return NextResponse.json(
       { error: "files(경로·내용)이 필요합니다." },
       { status: 400 }
     );
   }
+  const files = mergeDeployFilesWithDefaults(rawFiles);
   if (!buildLogTail) {
     return NextResponse.json(
       { error: "buildLogTail(Vercel 빌드 로그 일부)이 필요합니다." },

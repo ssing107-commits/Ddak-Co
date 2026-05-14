@@ -10,7 +10,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
 입력으로 받은 앱 설계서를 바탕으로 Next.js 14 App Router 프로젝트 코드를 완성하세요.
@@ -42,7 +42,7 @@ const SYSTEM_PROMPT = `당신은 "코딩 딱이"입니다.
   - npm registry에 실제 존재하는 버전만 사용할 것
   - 확실하지 않은 패키지 버전은 ^latest 대신 npm에서 확인된 안정 버전을 사용할 것
 - app/globals.css 등에 @tailwind base/components/utilities가 있으면 반드시 함께 포함: tailwind.config.ts(또는 .js), postcss.config.mjs(또는 .js). tailwind content에 "./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx}" 경로를 넣을 것.
-- tsconfig.json의 compilerOptions는 Next.js 14 + create-next-app 수준만 사용할 것. 특히 useDefineForEnumMembers, verbatimModuleSyntax 등 Next 번들 TS가 모르는 옵션은 넣지 말 것(넣으면 Unknown compiler option으로 빌드 실패).
+- tsconfig.json의 compilerOptions는 Next.js 14 + create-next-app 수준만 사용할 것. paths에 "@/*": ["./*"] 를 반드시 포함할 것(@/ import 해석·webpack module-not-found 방지). useDefineForEnumMembers, verbatimModuleSyntax 등 Next 번들 TS가 모르는 옵션은 넣지 말 것(넣으면 Unknown compiler option으로 빌드 실패).
 - 모든 .ts/.tsx는 문법적으로 유효해야 함. for/while/if의 괄호·중괄호 짝을 출력 전에 점검할 것. 금지 예: for (let i = 0; i < n; i++) ++) { 처럼 중복된 ++) 또는 닫는 괄호 오류`;
 
 type CodeRequest = {
