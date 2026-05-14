@@ -1,9 +1,17 @@
 /**
- * GitHub 푸시 시 항상 병합되는 Tailwind 전용 UI 키트(생성 앱 루트 기준 경로).
+ * GitHub 푸시 시 항상 병합되는 기본 파일(생성 앱 루트 기준 경로).
+ * - Tailwind 전용 UI 키트(components/ui, lib/utils)
+ * - Vercel 등 CI에서 npm ECONNRESET 완화용 .npmrc
  * 요청 files가 동일 path를 주면 요청 쪽이 우선한다.
  */
 
 export type DeployDefaultFile = { path: string; content: string };
+
+/** Vercel 빌드 시 registry.npmjs.org 일시 끊김에 대한 재시도 강화 */
+const NPM_RC = `fetch-retries=8
+fetch-retry-mintimeout=2000
+fetch-retry-maxtimeout=120000
+`;
 
 const LIB_UTILS = `export type ClassValue = string | number | boolean | null | undefined;
 
@@ -393,6 +401,7 @@ export function IconClock(props: IconProps) {
 
 export function getDeployDefaultUiFiles(): DeployDefaultFile[] {
   return [
+    { path: ".npmrc", content: NPM_RC },
     { path: "lib/utils.ts", content: LIB_UTILS },
     { path: "components/ui/button.tsx", content: BUTTON },
     { path: "components/ui/card.tsx", content: CARD },
