@@ -13,14 +13,14 @@ function isRetryableStructuredOutputError(message: string): boolean {
   );
 }
 
-/** Anthropic `generateObject`가 `{}` 등으로 끝날 때 tool → json 순으로 재시도 */
+/** Anthropic은 json 모드 구조화 생성 미지원 → tool 우선, 검증 실패 시 auto만 재시도 */
 export async function generateAgentFilesObject(params: {
   model: LanguageModel;
   system: string;
   prompt: string;
   maxTokens?: number;
 }) {
-  const modes = ["tool", "json"] as const;
+  const modes = ["tool", "auto"] as const;
   let lastErr: unknown;
   for (const mode of modes) {
     try {
@@ -38,11 +38,11 @@ export async function generateAgentFilesObject(params: {
     } catch (e) {
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
-      if (mode === "json" || !isRetryableStructuredOutputError(msg)) {
+      if (mode === "auto" || !isRetryableStructuredOutputError(msg)) {
         throw e;
       }
       console.warn(
-        `[generateAgentFilesObject] mode=${mode} 실패, json 모드로 재시도:`,
+        `[generateAgentFilesObject] mode=${mode} 실패, auto 모드로 재시도:`,
         msg.slice(0, 280)
       );
     }
@@ -56,7 +56,7 @@ export async function generateDesignDocObject(params: {
   prompt: string;
   maxTokens?: number;
 }) {
-  const modes = ["tool", "json"] as const;
+  const modes = ["tool", "auto"] as const;
   let lastErr: unknown;
   for (const mode of modes) {
     try {
@@ -74,11 +74,11 @@ export async function generateDesignDocObject(params: {
     } catch (e) {
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
-      if (mode === "json" || !isRetryableStructuredOutputError(msg)) {
+      if (mode === "auto" || !isRetryableStructuredOutputError(msg)) {
         throw e;
       }
       console.warn(
-        `[generateDesignDocObject] mode=${mode} 실패, json 모드로 재시도:`,
+        `[generateDesignDocObject] mode=${mode} 실패, auto 모드로 재시도:`,
         msg.slice(0, 280)
       );
     }
