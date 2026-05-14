@@ -11,6 +11,13 @@ export type AnthropicMessageContent =
   | { type: "text"; text: string }
   | { type: string; [key: string]: unknown };
 
+/** Prompt caching: system을 문자열로 보낼 때 Messages API 콘텐츠 블록 형태로 변환 */
+export type AnthropicSystemCachedTextBlock = {
+  type: "text";
+  text: string;
+  cache_control: { type: "ephemeral" };
+};
+
 export type AnthropicMessagesResponse = {
   id?: string;
   role?: string;
@@ -44,13 +51,31 @@ function extractFirstTextBlock(res: AnthropicMessagesResponse): string {
   return typeof text?.text === "string" ? text.text : "";
 }
 
+function systemParamToRequestBody(
+  system: string | AnthropicSystemCachedTextBlock[]
+): string | AnthropicSystemCachedTextBlock[] {
+  if (typeof system === "string") {
+    return [
+      {
+        type: "text",
+        text: system,
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+  }
+  return system;
+}
+
 export async function callAnthropicMessages(params: {
   apiKey: string;
   model: string;
   max_tokens: number;
-  system: string;
+  /** 문자열이면 prompt caching(ephemeral)이 적용된 콘텐츠 블록 배열로 변환되어 전송됩니다. */
+  system: string | AnthropicSystemCachedTextBlock[];
   messages: Array<{ role: "user" | "assistant"; content: string }>;
 }): Promise<{ status: number; raw: AnthropicMessagesResponse; text: string }> {
+  const system = systemParamToRequestBody(params.system);
+
   const res = await fetch(ANTHROPIC_MESSAGES_URL, {
     method: "POST",
     headers: {
@@ -61,7 +86,7 @@ export async function callAnthropicMessages(params: {
     body: JSON.stringify({
       model: params.model,
       max_tokens: params.max_tokens,
-      system: params.system,
+      system,
       messages: params.messages,
     }),
   });
