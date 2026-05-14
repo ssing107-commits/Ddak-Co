@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+  const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001";
 
   try {
     const { text } = await callAnthropicMessages({
