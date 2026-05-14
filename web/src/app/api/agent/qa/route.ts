@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generateObject } from "ai";
 
 import {
   normalizePathContentFiles,
   type PathContentFile,
 } from "@/lib/agent-path-files";
-import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { agentFilesSchema } from "@/lib/agent-schemas";
 import {
-  peelOuterMarkdownJsonFences,
-  sliceGreedyJsonObject,
-} from "@/lib/anthropic-json-text";
+  createAnthropicLanguageModel,
+  getAnthropicApiKeyFromEnv,
+  isAnthropicUnauthorizedError,
+} from "@/lib/anthropic-api";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 
 export const runtime = "nodejs";
@@ -19,8 +21,7 @@ const SYSTEM_PROMPT = `당신은 코드 품질 검수 전문가입니다.
 Vercel 빌드가 반드시 통과되어야 합니다.
 
 입력으로 받은 코드 파일 목록을 검수/수정해 최종 코드 파일 목록을 반환하세요.
-반드시 아래 JSON만 출력하세요. 마크다운/설명/코드블록 금지.
-{"files":[{"path":"파일경로","content":"파일전체내용"},...]}
+출력은 스키마에 맞는 객체만 생성합니다(별도 설명·마크다운 금지).
 
 검증/수정 항목:
 - TypeScript/JSX 문법 오류 전수 점검 (잘못된 for/while/if 괄호, 예: i++) ++) 같은 오타, 닫히지 않은 블록)
@@ -44,12 +45,6 @@ type QaRequest = {
   buildLogTail?: unknown;
   deploySummary?: unknown;
 };
-
-const QA_PARSE_FALLBACK = {
-  passed: false,
-  issues: ["QA 응답 파싱 실패"],
-  suggestions: [],
-} as const;
 
 function extractInputFiles(body: QaRequest): PathContentFile[] {
   const direct = normalizePathContentFiles(body.files);
@@ -91,6 +86,7 @@ export async function POST(req: NextRequest) {
   }
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001";
+  const languageModel = createAnthropicLanguageModel(apiKey, model);
 
   const buildLogTail =
     typeof body.buildLogTail === "string" ? body.buildLogTail.trim() : "";
@@ -106,42 +102,26 @@ export async function POST(req: NextRequest) {
         ].join("\n")
       : "";
 
+  const userPrompt =
+    `아래 코드를 QA 기준으로 검수/수정해 최종 파일 목록으로 반환하세요.\n` +
+    (body.designDoc &&
+    typeof body.designDoc === "object" &&
+    !Array.isArray(body.designDoc)
+      ? `기획서 designDoc가 함께 전달되었습니다. coreFeatures 각각에 대응하는 **사용자 조작 요소**가 UI에 남아 있는지 확인하고, 빌드 통과를 이유로 상호작용만 덜어내지 마세요.\n`
+      : "") +
+    buildFailureSection +
+    `\n${JSON.stringify({ files }, null, 2)}`;
+
   try {
-    const { text } = await callAnthropicMessages({
-      apiKey,
-      model,
-      max_tokens: 16384,
+    const { object } = await generateObject({
+      model: languageModel,
+      schema: agentFilesSchema,
       system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content:
-            `아래 코드를 QA 기준으로 검수/수정해 최종 파일 JSON으로 반환하세요.\n` +
-            (body.designDoc &&
-            typeof body.designDoc === "object" &&
-            !Array.isArray(body.designDoc)
-              ? `기획서 designDoc가 함께 전달되었습니다. coreFeatures 각각에 대응하는 **사용자 조작 요소**가 UI에 남아 있는지 확인하고, 빌드 통과를 이유로 상호작용만 덜어내지 마세요.\n`
-              : "") +
-            buildFailureSection +
-            `\n${JSON.stringify({ files }, null, 2)}`,
-        },
-      ],
+      prompt: userPrompt,
+      maxTokens: 16_384,
     });
 
-    if (!text) {
-      return NextResponse.json({ error: "QA 응답을 처리할 수 없습니다." }, { status: 502 });
-    }
-
-    const peeled = peelOuterMarkdownJsonFences(text);
-    const jsonStr = sliceGreedyJsonObject(peeled);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      return NextResponse.json(QA_PARSE_FALLBACK);
-    }
-
-    const finalFiles = normalizePathContentFiles((parsed as { files?: unknown }).files);
+    const finalFiles = normalizePathContentFiles(object.files);
     if (finalFiles.length === 0) {
       return NextResponse.json({ error: "검증 완료 파일 목록이 비어 있습니다." }, { status: 502 });
     }
@@ -149,7 +129,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ files: postProcessAgentFiles(finalFiles) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("(HTTP 401)")) {
+    if (isAnthropicUnauthorizedError(e)) {
       return NextResponse.json(
         { error: "Anthropic API 키가 유효하지 않습니다. (x-api-key 확인)" },
         { status: 401 }
@@ -158,4 +138,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `QA 에이전트 실행 실패: ${msg}` }, { status: 502 });
   }
 }
-

@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { generateObject } from "ai";
 
 import {
   normalizePathContentFiles,
   type PathContentFile,
 } from "@/lib/agent-path-files";
-import { callAnthropicMessages, getAnthropicApiKeyFromEnv } from "@/lib/anthropic-api";
+import { agentFilesSchema } from "@/lib/agent-schemas";
 import {
-  peelOuterMarkdownJsonFences,
-  sliceGreedyJsonObject,
-} from "@/lib/anthropic-json-text";
+  createAnthropicLanguageModel,
+  getAnthropicApiKeyFromEnv,
+  isAnthropicUnauthorizedError,
+} from "@/lib/anthropic-api";
 import { postProcessAgentFiles } from "@/lib/agent-generated-files";
 
 export const runtime = "nodejs";
@@ -19,8 +21,7 @@ const SYSTEM_PROMPT = `당신은 Vercel 또는 로컬 npm run build 실패 로�
 
 입력: 프로젝트 파일 목록 + buildLogTail(빌드 stderr 등) + (선택) deploySummary
 
-반드시 아래 JSON만 출력하세요. 마크다운/설명/코드블록 금지.
-{"files":[{"path":"파일경로","content":"파일전체내용"},...]}
+출력은 스키마에 맞는 객체만 생성합니다(별도 설명·마크다운 금지).
 
 원칙:
 - 로그에 나온 오류·파일·줄을 우선 해결할 것
@@ -80,47 +81,26 @@ export async function POST(req: NextRequest) {
   }
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+  const languageModel = createAnthropicLanguageModel(apiKey, model);
+
+  const userPrompt = [
+    deploySummary ? `요약: ${deploySummary}\n\n` : "",
+    "=== buildLogTail ===\n",
+    buildLogTail,
+    "\n\n=== files (JSON) ===\n",
+    JSON.stringify({ files }, null, 2),
+  ].join("");
 
   try {
-    const { text } = await callAnthropicMessages({
-      apiKey,
-      model,
-      max_tokens: 16384,
+    const { object } = await generateObject({
+      model: languageModel,
+      schema: agentFilesSchema,
       system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [
-            deploySummary ? `요약: ${deploySummary}\n\n` : "",
-            "=== buildLogTail ===\n",
-            buildLogTail,
-            "\n\n=== files (JSON) ===\n",
-            JSON.stringify({ files }, null, 2),
-          ].join(""),
-        },
-      ],
+      prompt: userPrompt,
+      maxTokens: 16_384,
     });
 
-    if (!text) {
-      return NextResponse.json(
-        { error: "fix-build 응답을 처리할 수 없습니다." },
-        { status: 502 }
-      );
-    }
-
-    const peeled = peelOuterMarkdownJsonFences(text);
-    const jsonStr = sliceGreedyJsonObject(peeled);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      return NextResponse.json(
-        { error: "fix-build JSON 파싱에 실패했습니다." },
-        { status: 502 }
-      );
-    }
-
-    const out = normalizePathContentFiles((parsed as { files?: unknown }).files);
+    const out = normalizePathContentFiles(object.files);
     if (out.length === 0) {
       return NextResponse.json(
         { error: "수정된 파일 목록이 비어 있습니다." },
@@ -131,7 +111,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ files: postProcessAgentFiles(out) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("(HTTP 401)")) {
+    if (isAnthropicUnauthorizedError(e)) {
       return NextResponse.json(
         { error: "Anthropic API 키가 유효하지 않습니다. (x-api-key 확인)" },
         { status: 401 }
