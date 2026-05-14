@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { mergeDeployFilesWithDefaults } from "@/lib/deploy-default-ui-files";
 import { createRepo, pushCode } from "@/lib/github";
 import {
   createProject,
@@ -153,7 +154,8 @@ export async function POST(req: NextRequest) {
 
   console.log("[deploy] 4. 코드 푸시 시작");
   try {
-    await pushCode(repoName, files);
+    const filesToPush = mergeDeployFilesWithDefaults(files);
+    await pushCode(repoName, filesToPush);
     console.log("[deploy] 5. 코드 푸시 완료");
   } catch (e) {
     console.error("[deploy] pushCode 에러 전체:", e);

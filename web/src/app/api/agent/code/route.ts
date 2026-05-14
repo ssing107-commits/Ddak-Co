@@ -29,34 +29,26 @@ content 값은 이스케이프된 문자열로 작성하세요.
 규칙:
 - Next.js 14 App Router 구조를 사용
 - TypeScript strict 모드 준수 (사용하지 않는 변수/함수/import 절대 금지)
-- shadcn/ui + Tailwind CSS 사용
+- Tailwind CSS 유틸리티 클래스로 스타일링
+- shadcn/ui, radix-ui, lucide-react 등 외부 UI 라이브러리 패키지는 import하지 말 것.
+- UI 컴포넌트는 반드시 아래 경로에서 import해서 사용할 것:
+  @/components/ui/button
+  @/components/ui/card
+  @/components/ui/input
+  @/components/ui/badge
+  @/components/ui/icons
+  위 파일들은 배포 시 항상 저장소에 포함되므로, 동일 역할의 Button·Card·Input·Badge·아이콘을 페이지 안에 다시 직접 구현하지 말 것.
+- 아이콘은 가능하면 @/components/ui/icons의 SVG 컴포넌트를 사용하고, icons에 없는 경우에만 인라인 SVG를 작성할 것.
+- npm install이나 패키지 추가 설치 없이 next.js 기본 패키지만으로 동작해야 함. (단, Tailwind 적용을 위해 tailwindcss·postcss·autoprefixer 등 Tailwind 구동에 필요한 최소 devDependencies/dependencies만 package.json에 포함하는 것은 허용. 그 외 UI 전용 npm 패키지는 추가 금지.)
 - UI 텍스트는 한국어
 - 모바일 우선 반응형
 - path는 프로젝트 루트 기준 상대 경로
 - 최소 포함 파일: app/layout.tsx, app/page.tsx
 - 반드시 package.json을 포함하고, dependencies에 next, react, react-dom을 넣을 것
 - package.json 작성 시 반드시 아래 규칙을 따를 것:
-  - lucide-react를 import해서 사용하는 컴포넌트를 생성할 경우, dependencies에 "lucide-react": "^0.447.0"을 반드시 포함할 것
-  - shadcn/ui 기반 Next.js 앱을 생성할 때는 아래 패키지를 package.json dependencies에 기본 포함할 것:
-    - next: 14.2.30
-    - react: ^18
-    - react-dom: ^18
-    - lucide-react: ^0.447.0
-    - tailwindcss: ^3.4.0
-    - class-variance-authority: ^0.7.0
-    - clsx: ^2.1.0
-    - tailwind-merge: ^2.3.0
-    - @radix-ui/react-slot: ^1.1.0
-  - @radix-ui/* 패키지는 ^1.x 버전대를 기본으로 사용할 것
-  - shadcn/ui 관련 패키지는 아래 검증된 버전만 사용:
-    - @radix-ui/react-slot: ^1.1.0
-    - @radix-ui/react-dialog: ^1.1.0
-    - @radix-ui/react-dropdown-menu: ^2.1.0
-    - class-variance-authority: ^0.7.0
-    - clsx: ^2.1.0
-    - tailwind-merge: ^2.3.0
+  - dependencies에는 next, react, react-dom과 Tailwind 구동에 필요한 최소 패키지(tailwindcss, postcss, autoprefixer 등)만 둘 것. lucide-react, @radix-ui/*, class-variance-authority, clsx, tailwind-merge 등 UI·헤드리스 컴포넌트용 패키지는 넣지 말 것.
   - npm registry에 실제 존재하는 버전만 사용할 것
-  - 확실하지 않은 패키지 버전은 ^latest 대신 안정적인 ^1.x 또는 ^2.x 중 npm에서 확인된 버전 사용
+  - 확실하지 않은 패키지 버전은 ^latest 대신 npm에서 확인된 안정 버전을 사용할 것
 - app/globals.css 등에 @tailwind base/components/utilities가 있으면 반드시 함께 포함: tailwind.config.ts(또는 .js), postcss.config.mjs(또는 .js). tailwind content에 "./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx}" 경로를 넣을 것.
 - 모든 .ts/.tsx는 문법적으로 유효해야 함. for/while/if의 괄호·중괄호 짝을 출력 전에 점검할 것. 금지 예: for (let i = 0; i < n; i++) ++) { 처럼 중복된 ++) 또는 닫는 괄호 오류`;
 
@@ -65,6 +57,10 @@ type CodeRequest = {
   designDoc?: unknown;
   input?: unknown;
   draft?: boolean;
+  /** QA 이후 등: 기존 프로젝트 파일. 있으면 빌드 복구 모드로 동작 */
+  existingFiles?: unknown;
+  buildLogTail?: unknown;
+  deploySummary?: unknown;
 };
 
 type GeneratedFile = {
@@ -213,7 +209,44 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const repairBaseline = normalizeFiles(body.existingFiles);
+  const buildLogTail =
+    typeof body.buildLogTail === "string" ? body.buildLogTail.trim() : "";
+  const deploySummary =
+    typeof body.deploySummary === "string" ? body.deploySummary.trim() : "";
+  const repairMode = repairBaseline.length > 0;
+
+  if (repairMode && !buildLogTail) {
+    return NextResponse.json(
+      { error: "빌드 복구 모드(existingFiles)일 때는 buildLogTail이 필요합니다." },
+      { status: 400 }
+    );
+  }
+
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+
+  const userContent = repairMode
+    ? [
+        "아래 **설계서**와 **기존 프로젝트 파일(existingFiles)**가 있습니다.",
+        "Vercel 또는 npm run build가 실패했습니다. QA 검수를 거친 baseline을 바탕으로, **동일 path 구조를 유지한 채** 빌드가 통과하도록 전체 파일 JSON을 다시 출력하세요.",
+        "불필요한 기능 추가·대규모 리팩터링은 금지하고, 로그에 나온 오류를 우선 해결하세요.",
+        "반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.",
+        "",
+        deploySummary ? `=== 배포/빌드 요약 ===\n${deploySummary}\n` : "",
+        `=== buildLogTail ===\n${buildLogTail}\n`,
+        "=== 설계서 ===\n",
+        JSON.stringify(design, null, 2),
+        "\n\n=== 기존 파일(existingFiles) ===\n",
+        JSON.stringify({ files: repairBaseline }, null, 2),
+      ].join("\n")
+    : `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.
+반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.
+${draftMode ? `이번 요청은 빠른 초안 배포용이지만, **허전한 뼈대만 두지 마세요.**
+- 설계서의 coreFeatures(선택된 기능)마다 **화면에서 바로 체감되는 동작**을 최소 1개씩 넣으세요(예: 버튼 클릭 시 상태 변화, 입력·목록·토글, 간단한 폼 제출 후 토스트/안내). 데모용 더미 데이터·로컬 state로 충분합니다.
+- **app/page.tsx**는 랜딩 겸 기능 미리보기 섹션을 갖추고, 필요하면 기능별로 app/ 하위 라우트를 나눠도 됩니다.
+- 총 파일 수는 **12개 이하**, 주석은 최소화, 코드는 읽기 쉽게 유지하세요.` : ""}
+
+${JSON.stringify(design, null, 2)}`;
 
   try {
     const { text } = await callAnthropicMessages({
@@ -224,14 +257,7 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "user",
-          content: `아래 설계서를 바탕으로 코드 파일 JSON을 생성하세요.
-반드시 순수 JSON만 반환하고, content는 일반 문자열(JSON escape 적용)로 반환하세요. base64는 절대 사용하지 마세요.
-${draftMode ? `이번 요청은 빠른 초안 배포용이지만, **허전한 뼈대만 두지 마세요.**
-- 설계서의 coreFeatures(선택된 기능)마다 **화면에서 바로 체감되는 동작**을 최소 1개씩 넣으세요(예: 버튼 클릭 시 상태 변화, 입력·목록·토글, 간단한 폼 제출 후 토스트/안내). 데모용 더미 데이터·로컬 state로 충분합니다.
-- **app/page.tsx**는 랜딩 겸 기능 미리보기 섹션을 갖추고, 필요하면 기능별로 app/ 하위 라우트를 나눠도 됩니다.
-- 총 파일 수는 **12개 이하**, 주석은 최소화, 코드는 읽기 쉽게 유지하세요.` : ""}
-
-${JSON.stringify(design, null, 2)}`,
+          content: userContent,
         },
       ],
     });

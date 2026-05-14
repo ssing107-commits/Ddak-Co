@@ -42,10 +42,34 @@ function appendDeployStructuredFailure(
   }
 }
 
-/** Vercel 배포 실패 시 fix-build 1회 후 같은 레포로 재배포(최대 1라운드) */
-async function deployWithOneFixRound(params: {
+/** Vercel 배포: 최대 4회 시도(첫 실패 후 QA→코딩 복구를 최대 3회). */
+const MAX_VERCEL_DEPLOY_ATTEMPTS = 4;
+
+function isDeployRecoverable502(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 502;
+}
+
+function extractDeployFailureFields(body: unknown): {
+  buildLogTail: string;
+  deploySummary: string;
+  repoName: string;
+  projectId: string;
+} | null {
+  if (!body || typeof body !== "object") return null;
+  const rec = body as Record<string, unknown>;
+  const buildLogTail = typeof rec.buildLogTail === "string" ? rec.buildLogTail.trim() : "";
+  const repoName = typeof rec.repoName === "string" ? rec.repoName.trim() : "";
+  const projectId = typeof rec.projectId === "string" ? rec.projectId.trim() : "";
+  const deploySummary = typeof rec.error === "string" ? rec.error.trim() : "";
+  if (!buildLogTail || !repoName || !projectId) return null;
+  return { buildLogTail, deploySummary, repoName, projectId };
+}
+
+async function deployWithQaCodeRetryLoop(params: {
   userId: string;
   projectName: string;
+  designDoc: DesignDoc;
+  draft: boolean;
   files: FileItem[];
   repoName?: string;
   projectId?: string;
@@ -68,56 +92,90 @@ async function deployWithOneFixRound(params: {
   };
 
   let files = params.files;
-  try {
-    const deploy = await deployOnce(files);
-    return { deploy, files };
-  } catch (firstErr) {
-    appendDeployStructuredFailure(params.appendLog, firstErr);
-    if (!(firstErr instanceof ApiError) || firstErr.status !== 502) {
-      throw firstErr;
-    }
-    const o = firstErr.body;
-    if (!o || typeof o !== "object") throw firstErr;
-    const rec = o as Record<string, unknown>;
-    const buildLogTail =
-      typeof rec.buildLogTail === "string" ? rec.buildLogTail.trim() : "";
-    if (!buildLogTail) throw firstErr;
+  let repoO = params.repoName?.trim() || "";
+  let projO = params.projectId?.trim() || "";
 
-    const repoFromError =
-      typeof rec.repoName === "string" ? rec.repoName.trim() : "";
-    const projectFromError =
-      typeof rec.projectId === "string" ? rec.projectId.trim() : "";
-    const repoForRetry = repoFromError || params.repoName?.trim() || "";
-    const projectForRetry = projectFromError || params.projectId?.trim() || "";
-    if (!repoForRetry || !projectForRetry) {
-      params.appendLog(
-        "자동 수정·재배포: repo/project 정보가 없어 건너뜁니다."
-      );
-      throw firstErr;
-    }
-
-    params.appendLog("배포 실패 — 빌드 로그 기준 fix-build 1회 실행 중...");
+  for (let attempt = 0; attempt < MAX_VERCEL_DEPLOY_ATTEMPTS; attempt++) {
     try {
-      const fixed = await postJson<{ files: FileItem[] }>("/api/agent/fix-build", {
+      const deploy = await deployOnce(
         files,
-        buildLogTail,
-        ...(typeof rec.error === "string" ? { deploySummary: rec.error } : {}),
-      });
-      if (!Array.isArray(fixed.files) || fixed.files.length === 0) {
-        throw firstErr;
-      }
-      files = fixed.files;
-    } catch (fixErr) {
-      params.appendLog(
-        `fix-build 실패: ${errorMessage(fixErr, "알 수 없는 오류")}`
+        repoO || undefined,
+        projO || undefined
       );
-      throw firstErr;
-    }
+      return { deploy, files };
+    } catch (err) {
+      appendDeployStructuredFailure(params.appendLog, err);
 
-    params.appendLog("fix-build 완료 — 재배포 중...");
-    const deploy = await deployOnce(files, repoForRetry, projectForRetry);
-    return { deploy, files };
+      if (!isDeployRecoverable502(err)) {
+        throw err;
+      }
+
+      const fields = extractDeployFailureFields(err.body);
+      if (!fields) {
+        throw err;
+      }
+
+      repoO = fields.repoName;
+      projO = fields.projectId;
+
+      if (attempt >= MAX_VERCEL_DEPLOY_ATTEMPTS - 1) {
+        const tail =
+          fields.deploySummary ||
+          "빌드 로그는 위 로그 패널을 참고하세요.";
+        const msg = `Vercel 빌드가 ${MAX_VERCEL_DEPLOY_ATTEMPTS}회 시도·QA·코딩 복구 3회 후에도 실패했습니다. ${tail}`;
+        params.appendLog(msg);
+        throw new Error(msg);
+      }
+
+      params.appendLog(
+        `배포 실패 (${attempt + 1}/${MAX_VERCEL_DEPLOY_ATTEMPTS}) — 빌드 로그를 QA 에이전트에 전달합니다...`
+      );
+
+      let qaFiles: FileItem[];
+      try {
+        const qaResult = await postJson<Record<string, unknown>>("/api/agent/qa", {
+          files,
+          designDoc: params.designDoc,
+          buildLogTail: fields.buildLogTail,
+          deploySummary: fields.deploySummary,
+        });
+        const qaFilesRaw = qaResult.files;
+        if (!Array.isArray(qaFilesRaw) || qaFilesRaw.length === 0) {
+          throw new Error("QA 응답에 유효한 files 배열이 없습니다.");
+        }
+        qaFiles = qaFilesRaw as FileItem[];
+      } catch (qaErr) {
+        const m = errorMessage(qaErr, "알 수 없는 오류");
+        params.appendLog(`QA 단계 실패: ${m}`);
+        throw new Error(`QA 단계 실패로 빌드 복구를 중단했습니다: ${m}`);
+      }
+
+      params.appendLog("QA 완료 — 코딩 에이전트로 수정 적용 중...");
+      try {
+        const codeResult = await postJson<{ files: FileItem[] }>("/api/agent/code", {
+          designDoc: params.designDoc,
+          existingFiles: qaFiles,
+          buildLogTail: fields.buildLogTail,
+          deploySummary: fields.deploySummary,
+          draft: params.draft,
+        });
+        if (!Array.isArray(codeResult.files) || codeResult.files.length === 0) {
+          throw new Error("코드 에이전트 결과 files가 비어 있습니다.");
+        }
+        files = codeResult.files;
+      } catch (codeErr) {
+        const m = errorMessage(codeErr, "알 수 없는 오류");
+        params.appendLog(`코드 에이전트 실패: ${m}`);
+        throw new Error(`코드 에이전트 실패로 빌드 복구를 중단했습니다: ${m}`);
+      }
+
+      params.appendLog(
+        `코딩 에이전트 완료 — 재배포합니다 (${attempt + 2}/${MAX_VERCEL_DEPLOY_ATTEMPTS})...`
+      );
+    }
   }
+
+  throw new Error("Vercel 배포 재시도 로직이 예기치 않게 종료되었습니다.");
 }
 
 /** 1단계: 아이디어 → design API → 기획서·기능 초안 */
@@ -220,9 +278,11 @@ export async function runDraftDeployment(ctx: {
 
     ctx.appendLog("2단계 진행: GitHub 업로드 + Vercel 초안 배포 중...");
     const { deploy: deployResult, files: deployedFiles } =
-      await deployWithOneFixRound({
+      await deployWithQaCodeRetryLoop({
         userId: ctx.userRole ?? "anonymous",
         projectName: ctx.designDoc.appName,
+        designDoc: designForBuild,
+        draft: true,
         files: codeResult.files,
         appendLog: ctx.appendLog,
       });
@@ -294,9 +354,11 @@ export async function runFinalizeDeployment(ctx: {
     }
 
     ctx.appendLog("3단계 진행: 동일 레포 업데이트 및 재배포 중...");
-    const { deploy: redeployResult } = await deployWithOneFixRound({
+    const { deploy: redeployResult } = await deployWithQaCodeRetryLoop({
       userId: ctx.userRole ?? "anonymous",
       projectName: ctx.designDoc.appName,
+      designDoc: ctx.designDoc,
+      draft: false,
       files: qaResult.files,
       repoName: ctx.deployContext.repoName,
       projectId: ctx.deployContext.projectId,

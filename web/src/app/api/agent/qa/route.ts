@@ -40,6 +40,9 @@ type QaRequest = {
   input?: unknown;
   uiFiles?: unknown;
   designDoc?: unknown;
+  /** Vercel 배포 실패 시 전달되는 빌드 로그 일부 */
+  buildLogTail?: unknown;
+  deploySummary?: unknown;
 };
 
 const QA_PARSE_FALLBACK = {
@@ -89,6 +92,20 @@ export async function POST(req: NextRequest) {
 
   const model = process.env.ANTHROPIC_MODEL?.trim() || "claude-haiku-4-5-20251001";
 
+  const buildLogTail =
+    typeof body.buildLogTail === "string" ? body.buildLogTail.trim() : "";
+  const deploySummary =
+    typeof body.deploySummary === "string" ? body.deploySummary.trim() : "";
+  const buildFailureSection =
+    buildLogTail || deploySummary
+      ? [
+          "",
+          "=== Vercel/npm 빌드 실패 정보 (반드시 이 오류를 해소할 것) ===",
+          deploySummary ? `요약: ${deploySummary}\n` : "",
+          buildLogTail ? `--- buildLogTail ---\n${buildLogTail}\n` : "",
+        ].join("\n")
+      : "";
+
   try {
     const { text } = await callAnthropicMessages({
       apiKey,
@@ -105,6 +122,7 @@ export async function POST(req: NextRequest) {
             !Array.isArray(body.designDoc)
               ? `기획서 designDoc가 함께 전달되었습니다. coreFeatures 각각에 대응하는 **사용자 조작 요소**가 UI에 남아 있는지 확인하고, 빌드 통과를 이유로 상호작용만 덜어내지 마세요.\n`
               : "") +
+            buildFailureSection +
             `\n${JSON.stringify({ files }, null, 2)}`,
         },
       ],
